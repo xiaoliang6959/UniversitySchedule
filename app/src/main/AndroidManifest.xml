@@ -1,14 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
+    <!--
+      这里**故意不申请任何存储权限**（READ_EXTERNAL_STORAGE / WRITE_EXTERNAL_STORAGE /
+      requestLegacyExternalStorage 都删了）：
+        1. 导入导出走 SAF（系统文件选择器），权限按 URI 临时授予，根本不需要这两条；
+        2. 课表背景图由系统相册选择器返回 URI，同样不需要；
+        3. 应用唯一自己落盘的东西是 filesDir/bg_image（私有目录），与外部存储无关。
+      换句话说：这个应用从权限层面就没有能力往 /sdcard 之类的公共目录写东西，
+      任何出现在那里的文件都不可能是它产生的（导出的 .md 除外，那是用户自己选的落点）。
+    -->
+    <!-- 通知 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 按点提醒必须要精确闹钟；缺少这条声明会让 AlarmManager 退化成非精确闹钟（可偏移1小时） -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- 开机恢复上课提醒闹钟 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- 部分国产 ROM 省电白名单（可选，用户手动授权） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <application
         android:allowBackup="true"
         android:label="大学课程表"
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:requestLegacyExternalStorage="true">
+        android:theme="@style/Theme.ScheduleApp">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -23,5 +37,34 @@
                 <data android:mimeType="text/markdown"/>
             </intent-filter>
         </activity>
+
+        <!-- 上课提醒：仅由 AlarmManager 的 PendingIntent 内部投递，无需对外暴露 -->
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false"/>
+        <!-- 亮屏时刷一次焦点通知（ACTION_SCREEN_ON 在隐式广播豁免名单里，可静态注册；模拟器实测验证） -->
+        <receiver
+            android:name=".ScreenOnReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.SCREEN_ON"/>
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+                <!-- 手动改时间实际发的是这两个（在隐式广播豁免名单里），收到后重新排期 -->
+                <action android:name="android.intent.action.TIME_CHANGED"/>
+                <action android:name="android.intent.action.DATE_CHANGED"/>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- 保活前台服务/看门狗已移除：不再挂常驻通知，改为引导用户在最近任务里手动加锁 -->
     </application>
 </manifest>

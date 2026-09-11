@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色模式（系统深色时自动生效）：底色与 Theme.kt 里 DarkPalette.bg 一致（#171A1D）。
+      父主题换成非 Light 的那支，启动首屏里的系统控件（对话框底、键盘等）也跟着走深色。
+    -->
+    <style name="Theme.ScheduleApp" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/launch_bg</item>
+        <item name="android:statusBarColor">@color/launch_bg</item>
+        <item name="android:navigationBarColor">@color/launch_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>

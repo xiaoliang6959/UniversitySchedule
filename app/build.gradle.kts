@@ -12,13 +12,16 @@ android {
         applicationId = "com.schedule.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // 用 debug 签名：之前发出去的包都是 debug 签名的，换成别的签名就覆盖安装不上（得先卸载、丢数据）。
+            // release 变体本身没有 debug 的校验/工具开销，冷启动明显更快，所以正式交付走它。
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

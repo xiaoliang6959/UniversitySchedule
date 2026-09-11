@@ -35,3 +35,11 @@ captures/
 # OS files
 .DS_Store
 Thumbs.db
+
+# 本地调试 / 探测脚本与备份（不属于应用，也避免带上私人数据）
+_tools/
+_backup/
+_build_install.bat
+_fix_drawer.py
+tmp_*.xml
+tmp_*.sh

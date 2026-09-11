@@ -44,3 +44,10 @@ fun CourseSchedule.toFlatCourses(): List<Course> {
     }
     return result
 }
+
+/** 原地替换某课程的全部时段，保持它在扁平列表里的原位置（编辑后不再跳到最后）。 */
+fun replaceCourse(list: MutableList<Course>, name: String, newCourses: List<Course>) {
+    val idx = list.indexOfFirst { it.name == name }
+    list.removeAll { it.name == name }
+    if (idx >= 0) list.addAll(idx.coerceAtMost(list.size), newCourses) else list.addAll(newCourses)
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色模式的启动底色，与 Theme.kt 里 LightPalette.bg 一致（#EDF0F3） -->
+    <color name="launch_bg">#FFEDF0F3</color>
+</resources>

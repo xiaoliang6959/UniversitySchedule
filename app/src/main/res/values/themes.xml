@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      冷启动首屏（Android 12+ 的系统 SplashScreen 也直接取这里的 windowBackground）。
+      浅色模式用主页背景的那种浅灰，深色模式见 values-night/themes.xml ——
+      系统切到深色时会自动用那一份，启动就不会先闪一下白屏了。
+      注意：这里必须由 manifest 引用（@style/Theme.ScheduleApp），否则就是平台默认主题。
+    -->
     <style name="Theme.ScheduleApp" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#FF2C3E50</item>
-        <item name="android:navigationBarColor">#FFFFFFFF</item>
+        <item name="android:windowBackground">@color/launch_bg</item>
+        <item name="android:statusBarColor">@color/launch_bg</item>
+        <item name="android:navigationBarColor">@color/launch_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 </resources>
