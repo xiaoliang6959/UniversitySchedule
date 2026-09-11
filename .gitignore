@@ -43,3 +43,6 @@ _build_install.bat
 _fix_drawer.py
 tmp_*.xml
 tmp_*.sh
+
+# 临时调试脚本（下划线开头的 py）
+_*.py

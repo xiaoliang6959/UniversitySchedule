@@ -25,10 +25,10 @@ import java.time.ZoneId
  * - ongoing：右滑划不掉，"清除全部"也带不走，只有点通知上的「关闭」才会消失
  * - 独立渠道（等级 HIGH 但通知级 setSilent，实际不响铃、不弹横幅；
  *   等级给高是为了能上锁屏）：到点提醒仍由 class_start / class_advance / class_end 三渠道负责
- * - 锁屏可见；灭屏也照常刷新 —— 这条通知在锁屏上是看得见的，
- *   冻住不动会被当成 bug。右上角的秒级倒计时由系统走（chronometer），
- *   标题里的"还有 X 分钟"则靠每分钟的心跳刷新，两者互补
- * - 标题只放"还有 X 分钟上课"，课名在正文第一行：课名再长也挤不掉关键信息
+ * - 锁屏可见；灭屏也照常刷新 —— 这条通知在锁屏上是看得见的，冻住不动会被当成 bug。
+ *   标题写"还剩 X 分钟下课"（精确到分钟），靠 setAlarmClock 心跳每分钟真刷新；
+ *   右上角另有系统倒计时给秒级精确值。两者都锚在同一个"到点时刻"上，所以对得上。
+ * - 标题只放状态（距上课/距下课…），课名在正文第一行：课名再长也挤不掉关键信息
  * - 息屏显示（AOD）已放弃：本该靠 miui.focus.param 让那行字上息屏，但实测澎湃会把整条通知吞掉
  *   （见 [applyMiuiFocusParam] 的注释），所以现在走"亮屏锁屏"这条路
  * - 正文不设置点击跳转，跳 App 交给「查看」按钮，避免误触
@@ -45,7 +45,7 @@ object FocusNotifier {
 
     private const val REQ_TICK = 3200
     /** 一次排入多少个心跳点（互不依赖，某个被系统吞掉不影响后面的） */
-    private const val TICK_QUEUE = 4
+    private const val TICK_QUEUE = 12
     private const val REQ_VIEW = 3201
     private const val REQ_DISMISS = 3202
 
@@ -175,7 +175,14 @@ object FocusNotifier {
     /**
      * 排入未来若干个心跳点（互不依赖）：以前只排"下一分钟"一个，整条链靠它递归续命，
      * 熄屏/被系统限制时一断就全断（实测：锁屏几分钟后剩余时间不再刷新，只能等亮屏或改时间才更正）。
-     * 用 setExactAndAllowWhileIdle 而不是 setAlarmClock：每分钟一次不该在状态栏挂闹钟图标。
+     * 队列长度 [TICK_QUEUE] 也不再是 4 —— 排得多才抗"被系统吃掉几个"。
+     *
+     * **用 setAlarmClock**：`setExactAndAllowWhileIdle` 在 Doze（灭屏静止）下会被节流到约 9 分钟一次，
+     * 锁屏上"还剩 X 分钟"就会停在旧值上（用户实测：标题还剩 1小时34分钟、系统倒计时已经 1:30:42）。
+     * setAlarmClock 免疫 Doze，能做到真的每分钟刷一次。
+     * 代价：焦点通知存在期间，状态栏会常驻一个小闹钟图标（系统对 alarm clock 的强制标识，去不掉）——
+     * 但上下课提醒本来就用 setAlarmClock，那个图标在课前/下课时本来就会出现，不是新增噪音。
+     * 拿不到精确闹钟权限等异常则退回原来的节流方案，至少还能刷。
      */
     fun armTicks(context: Context, times: List<LocalDateTime>) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
@@ -188,12 +195,16 @@ object FocusNotifier {
             }
             val millis = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
             runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pi)
-                } else {
-                    am.setExact(AlarmManager.RTC_WAKEUP, millis, pi)
-                }
-            }.onFailure { runCatching { am.set(AlarmManager.RTC_WAKEUP, millis, pi) } }
+                am.setAlarmClock(AlarmManager.AlarmClockInfo(millis, viewIntent(context)), pi)
+            }.onFailure {
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pi)
+                    } else {
+                        am.setExact(AlarmManager.RTC_WAKEUP, millis, pi)
+                    }
+                }.onFailure { runCatching { am.set(AlarmManager.RTC_WAKEUP, millis, pi) } }
+            }
         }
     }
 
@@ -319,14 +330,19 @@ object FocusNotifier {
     }
 
     /**
-     * 标题只放"状态 + 剩余时间"，**不放课名**：
-     *   课前/课上 → "还有 20 分钟上课 / 还有 1小时5分钟下课 / 马上上课"
+     * 标题：**状态 + 剩余分钟（精确到分钟）**，不放课名。
+     *   课前/课上 → "还剩1小时30分钟下课" / "还剩3分钟上课"
      *   上课后 15 秒 → "上课了"；下课后 15 秒 → "下课了"
      *   下课后 15~30 秒 → 有连堂："下一节课"；没有：继续"下课了"
      *
-     * 课名挪到正文第一行（见 [post]）。原因是标题和课名挤在同一行时，
-     * 课名一长就折行，把"还有 X 分钟上课"顶到第二行去——关键信息反被课名挡住。
-     * 分开之后课名再长也只影响它自己那行，标题永远只有十来个字。
+     * 课名挪到正文第一行（见 [post]）：挤在同一行时课名一长就折行，把关键信息顶到第二行去。
+     *
+     * ## 精确到分钟的前提：心跳必须真的每分钟刷一次
+     * 标题是**静态文字**，刷新晚多久就旧多久；右边的秒级倒计时却是系统按"到点时刻"自己走的。
+     * 所以"标题精确到分钟"成立的前提是 [armTicks] 用 **setAlarmClock**（Doze 免疫）——
+     * 之前用 setExactAndAllowWhileIdle 时，灭屏静止会被节流到约 9 分钟一次，
+     * 于是出现"标题还剩 1小时34分钟、倒计时却已经 1:30:42"（用户实测）。
+     * 若哪天刷不动了（拿不到精确闹钟权限等），两者又会对不上 —— 那时的兜底是把标题改回"约"值。
      */
     private fun titleText(st: FocusState): String = when (st.phase) {
         FocusPhase.START_ACK -> "上课了"
@@ -334,9 +350,13 @@ object FocusNotifier {
         FocusPhase.END_NEXT -> if (st.next != null) "下一节课" else "下课了"
         else -> {
             val suffix = if (st.phase == FocusPhase.PRE) "上课" else "下课"
-            if (st.minutesLeft <= 0) "马上$suffix" else "还有 ${advanceDurationText(st.minutesLeft)}$suffix"
+            if (st.minutesLeft <= 0) "马上$suffix"
+            else "还剩${titleRemainingText(st.minutesLeft)}$suffix"
         }
     }
+
+    /** 标题里的剩余时间文本：精确到分钟（"1小时30分钟" / "35分钟" / "3分钟"） */
+    private fun titleRemainingText(minutesLeft: Int): String = advanceDurationText(minutesLeft)
 
     private fun post(context: Context, st: FocusState) {
         if (!notificationsGranted(context)) return
@@ -344,7 +364,7 @@ object FocusNotifier {
         // 显示"下一节"那一段时，正文换成下一节课的信息
         val shown = if (st.phase == FocusPhase.END_NEXT) (st.next ?: e) else e
         // 正文两行：第一行课名（多长都只影响自己这行），第二行时间·节次·教室。
-        // 课名放这里而不是标题，就不会再把"还有 X 分钟上课"挤到第二行去。
+        // 课名放这里而不是标题，就不会再把状态行挤到第二行去。
         val detail = buildString {
             append(shown.timeRangeText()).append(" · ").append(shown.compactSlotLabel())
             if (shown.course.room.isNotBlank()) append(" · ").append(shown.course.room)
