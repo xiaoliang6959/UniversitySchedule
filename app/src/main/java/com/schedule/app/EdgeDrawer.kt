@@ -81,9 +81,21 @@ class EdgeDrawerState {
 
     val isOpen: Boolean get() = targetOpen
 
+    /**
+     * 开合**真的发生翻转**时回调（true = 打开，false = 关闭）。
+     *
+     * 由创建方注入，不在这里拿 Context —— 这个类只是个 UI 状态，不该依赖 Android 环境。
+     * 放在这里是因为 [animateTo] 是唯一的开合入口：汉堡键、边缘手势、点遮罩全走它，
+     * 挂一处就全覆盖，不会漏掉某条路径。
+     */
+    var onOpenStateChanged: ((Boolean) -> Unit)? = null
+
     /** 补间到目标（唯一的动画入口，调用方自己 launch） */
     suspend fun animateTo(target: Float) {
+        val wasOpen = targetOpen
         targetOpen = target > 0.5f
+        // 只有"关→开"或"开→关"才提示：已经在同一态里再补间一次（或拖到一半又弹回原态）不该响
+        if (targetOpen != wasOpen) onOpenStateChanged?.invoke(targetOpen)
         scrimVisible = true
         anim.snapTo(progress)
         anim.animateTo(target, tween(DRAWER_ANIM_MS, easing = FlipEasing)) { progress = value }

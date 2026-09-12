@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import androidx.compose.ui.platform.LocalContext
 
 /**
  * 节假日设置页（雏形）：
@@ -32,6 +33,7 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HolidayPage(prefs: android.content.SharedPreferences, onBack: () -> Unit) {
+    val hapticCtx = LocalContext.current
     var holidays by remember { mutableStateOf(loadHolidays(prefs)) }
     var editing by remember { mutableStateOf<HolidayItem?>(null) }   // null=不显示弹窗
     var adding by remember { mutableStateOf(false) }
@@ -46,12 +48,12 @@ fun HolidayPage(prefs: android.content.SharedPreferences, onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = { Text("节假日设置（${holidays.size}个）") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+                navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { adding = true }, containerColor = AppC.success) {
+            FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); adding = true }, containerColor = AppC.success) {
                 Icon(Icons.Default.Add, "添加节假日", tint = Color.White)
             }
         }
@@ -80,8 +82,8 @@ fun HolidayPage(prefs: android.content.SharedPreferences, onBack: () -> Unit) {
                                 Text("未设置补课日", fontSize = 12.sp, color = AppC.placeholder)
                             }
                         }
-                        IconButton(onClick = { editing = h }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
-                        IconButton(onClick = { pendingDelete = h }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); editing = h }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDelete = h }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
                     }
                 }
             }
@@ -92,14 +94,14 @@ fun HolidayPage(prefs: android.content.SharedPreferences, onBack: () -> Unit) {
         HolidayEditDialog(
             initial = null,
             onDismiss = { adding = false },
-            onConfirm = { item -> persist(holidays + item); adding = false }
+            onConfirm = { item -> tickHaptic(hapticCtx, HapticKind.TAP); persist(holidays + item); adding = false }
         )
     }
     editing?.let { cur ->
         HolidayEditDialog(
             initial = cur,
             onDismiss = { editing = null },
-            onConfirm = { item -> persist(holidays.map { if (it.id == item.id) item else it }); editing = null }
+            onConfirm = { item -> tickHaptic(hapticCtx, HapticKind.TAP); persist(holidays.map { if (it.id == item.id) item else it }); editing = null }
         )
     }
     pendingDelete?.let { del ->
@@ -108,8 +110,8 @@ fun HolidayPage(prefs: android.content.SharedPreferences, onBack: () -> Unit) {
             containerColor = AppC.card, shape = RoundedCornerShape(16.dp),
             title = { Text("删除节假日") },
             text = { Text("确定删除「${del.name.ifBlank { "未命名节假日" }}」吗？课表将恢复显示这些日期的课程。") },
-            confirmButton = { TextButton(onClick = { persist(holidays.filter { it.id != del.id }); pendingDelete = null }) { Text("删除", color = AppC.danger) } },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+            confirmButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); persist(holidays.filter { it.id != del.id }); pendingDelete = null }) { Text("删除", color = AppC.danger) } },
+            dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDelete = null }) { Text("取消") } }
         )
     }
 }
@@ -125,6 +127,7 @@ fun HolidayEditDialog(
     onDismiss: () -> Unit,
     onConfirm: (HolidayItem) -> Unit,
 ) {
+    val hapticCtx = LocalContext.current
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var offStart by remember { mutableStateOf(initial?.offStart ?: "") }
     var offEnd by remember { mutableStateOf(initial?.offEnd ?: "") }
@@ -154,19 +157,20 @@ fun HolidayEditDialog(
                                 DateField("补课日", m.date, "点击选择日期") { v -> makeups = makeups.toMutableList().also { it[idx] = m.copy(date = v) } }
                                 DateField("补哪天的课", m.sourceDate, "点击选择日期") { v -> makeups = makeups.toMutableList().also { it[idx] = m.copy(sourceDate = v) } }
                             }
-                            IconButton(onClick = { makeups = makeups.filterIndexed { i, _ -> i != idx } }) {
+                            IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); makeups = makeups.filterIndexed { i, _ -> i != idx } }) {
                                 Icon(Icons.Default.Delete, "删除补课日", tint = AppC.danger, modifier = Modifier.size(20.dp))
                             }
                         }
                     }
                 }
-                OutlinedButton(onClick = { makeups = makeups + HolidayMakeup("", "") }, modifier = Modifier.fillMaxWidth(),
+                OutlinedButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); makeups = makeups + HolidayMakeup("", "") }, modifier = Modifier.fillMaxWidth(),
                     border = BorderStroke(1.dp, AppC.accent)) { Text("＋ 添加补课日", color = AppC.accent, fontSize = 13.sp) }
                 if (error.isNotEmpty()) Text(error, fontSize = 12.sp, color = AppC.danger)
             }
         },
         confirmButton = {
             TextButton(onClick = {
+                tickHaptic(hapticCtx, HapticKind.TAP)
                 val s = parseHolidayDate(offStart)
                 var e = parseHolidayDate(offEnd)
                 // 结束留空时默认等于开始（放一天）
@@ -195,6 +199,6 @@ fun HolidayEditDialog(
                 }
             }) { Text("保存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消") } }
     )
 }

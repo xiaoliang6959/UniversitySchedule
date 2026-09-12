@@ -156,7 +156,7 @@ fun BgImagePositionPage(onBack: () -> Unit) {
                     ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { tickHaptic(context, HapticKind.TAP); onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = AppC.headerText)
                     }
                     Text("图像位置编辑", color = AppC.headerText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -258,7 +258,7 @@ fun BgImagePositionPage(onBack: () -> Unit) {
                     )
                     Switch(
                         checked = showNotify,
-                        onCheckedChange = { showNotify = it },
+                        onCheckedChange = { tickHaptic(context, HapticKind.TOGGLE); showNotify = it },
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = AppC.accentFill,
                             checkedThumbColor = readableOn(AppC.accentFill),
@@ -268,13 +268,14 @@ fun BgImagePositionPage(onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
-                        onClick = { fit = BgFit.DEFAULT },
+                        onClick = { tickHaptic(context, HapticKind.TAP); fit = BgFit.DEFAULT },
                         modifier = Modifier.weight(1f).height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AppC.accent),
                     ) { Text("重置", fontSize = 15.sp, fontWeight = FontWeight.Medium) }
                     Button(
                         onClick = {
+                            tickHaptic(context, HapticKind.TAP)
                             BackgroundStore.setFit(context, mode, fit)
                             AppC.bgFitVersion++
                             onBack()

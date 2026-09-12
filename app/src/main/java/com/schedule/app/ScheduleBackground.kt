@@ -140,7 +140,7 @@ fun BackgroundMiniPreview() {
                             Box(Modifier.weight(1f).fillMaxHeight().background(AppC.tableCell)) {
                                 if (r == 0 && c == 1) {
                                     Box(Modifier.padding(2.dp).fillMaxSize()
-                                        .background(COURSE_SWATCHES[5].bg, RoundedCornerShape(4.dp)),
+                                        .background(AppC.blockFill(COURSE_SWATCHES[5].bg), RoundedCornerShape(4.dp)),
                                         contentAlignment = Alignment.Center) {
                                         Text("高等数学", fontSize = 8.sp, color = COURSE_SWATCHES[5].fg)
                                     }

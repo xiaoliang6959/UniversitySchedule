@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -62,6 +63,8 @@ fun Modifier.dragToReorder(
     onSwap: (Int, Int) -> Unit,
 ): Modifier {
     val swap by rememberUpdatedState(onSwap)
+    // 长按起拖的触觉反馈：pointerInput 的回调不是 Composable，Context 得先在这里取
+    val hapticCtx = LocalContext.current
     val dragging = state.index == index
     return this
         .zIndex(if (dragging) 1f else 0f)
@@ -77,7 +80,7 @@ fun Modifier.dragToReorder(
         .onSizeChanged { state.heights[index] = it.height }
         .pointerInput(index) {
             detectDragGesturesAfterLongPress(
-                onDragStart = { state.index = index; state.offset = 0f },
+                onDragStart = { tickHaptic(hapticCtx, HapticKind.LONG_PRESS); state.index = index; state.offset = 0f },
                 onDrag = { change, amount ->
                     change.consume()
                     var i = state.index

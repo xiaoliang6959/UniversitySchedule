@@ -11,6 +11,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,13 +30,14 @@ private fun pickerText(): Color = readableOn(AppC.pickerBlue)
 
 @Composable
 private fun PickerButtons(onDismiss: () -> Unit, onConfirm: () -> Unit): Pair<@Composable () -> Unit, @Composable () -> Unit> {
+    val hapticCtx = LocalContext.current
     val dismiss: @Composable () -> Unit = {
-        Surface(shape = RoundedCornerShape(22.dp), color = AppC.chipGray, onClick = onDismiss) {
+        Surface(shape = RoundedCornerShape(22.dp), color = AppC.chipGray, onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) {
             Text("取消", modifier = Modifier.padding(horizontal = 36.dp, vertical = 12.dp), fontSize = 15.sp, color = AppC.textPrimary)
         }
     }
     val confirm: @Composable () -> Unit = {
-        Surface(shape = RoundedCornerShape(22.dp), color = PickerBlue, onClick = onConfirm) {
+        Surface(shape = RoundedCornerShape(22.dp), color = PickerBlue, onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onConfirm() }) {
             Text("确定", modifier = Modifier.padding(horizontal = 40.dp, vertical = 12.dp), fontSize = 15.sp, color = pickerText(), fontWeight = FontWeight.Bold)
         }
     }
@@ -48,6 +50,7 @@ private fun PickerButtons(onDismiss: () -> Unit, onConfirm: () -> Unit): Pair<@C
  */
 @Composable
 fun AppDatePickerDialog(title: String, initial: String, focus: String = "", onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    val hapticCtx = LocalContext.current   // clickable/onClick 不是 Composable，Context 得先取
     val init = parseHolidayDate(initial) ?: parseHolidayDate(focus) ?: LocalDate.now()
     var year by remember { mutableIntStateOf(init.year) }
     var month by remember { mutableIntStateOf(init.monthValue) }
@@ -68,12 +71,14 @@ fun AppDatePickerDialog(title: String, initial: String, focus: String = "", onDi
             Column(Modifier.fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("‹", modifier = Modifier.clickable {
+                        tickHaptic(hapticCtx, HapticKind.TAP)
                         if (month == 1) { month = 12; year-- } else month--
                     }.padding(horizontal = 18.dp, vertical = 6.dp), fontSize = 24.sp, color = AppC.textBody)
                     Spacer(Modifier.weight(1f))
                     Text("%d/%02d".format(year, month), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AppC.textPrimary)
                     Spacer(Modifier.weight(1f))
                     Text("›", modifier = Modifier.clickable {
+                        tickHaptic(hapticCtx, HapticKind.TAP)
                         if (month == 12) { month = 1; year++ } else month++
                     }.padding(horizontal = 18.dp, vertical = 6.dp), fontSize = 24.sp, color = AppC.textBody)
                 }
@@ -92,7 +97,7 @@ fun AppDatePickerDialog(title: String, initial: String, focus: String = "", onDi
                                     val date = LocalDate.of(year, month, dayNum)
                                     val sel = selected == date
                                     Surface(
-                                        onClick = { selected = date },
+                                        onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); selected = date },
                                         shape = RoundedCornerShape(10.dp),
                                         color = if (sel) PickerBlue else Color.Transparent,
                                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
@@ -157,6 +162,7 @@ fun AppTimePickerDialog(title: String, initial: String, onDismiss: () -> Unit, o
 
 @Composable
 fun DateInput(value: String, placeholder: String = "", modifier: Modifier = Modifier, focus: String = "", onValueChange: (String) -> Unit) {
+    val hapticCtx = LocalContext.current   // clickable 的 lambda 不是 Composable，Context 得先取
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         // 输入框负责撑高；matchParentSize 的透明层只接管点击、不参与测量
@@ -166,13 +172,14 @@ fun DateInput(value: String, placeholder: String = "", modifier: Modifier = Modi
             placeholder = { Text(placeholder, fontSize = 13.sp, color = AppC.placeholder) },
             modifier = Modifier.fillMaxWidth(),
         )
-        Box(Modifier.matchParentSize().clickable { open = true })
+        Box(Modifier.matchParentSize().clickable { tickHaptic(hapticCtx, HapticKind.TAP); open = true })
     }
     if (open) AppDatePickerDialog("选择日期", value, focus, onDismiss = { open = false }, onConfirm = { onValueChange(it); open = false })
 }
 
 @Composable
 fun TimeInput(value: String, placeholder: String = "", modifier: Modifier = Modifier, onValueChange: (String) -> Unit) {
+    val hapticCtx = LocalContext.current   // clickable 的 lambda 不是 Composable，Context 得先取
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         OutlinedTextField(
@@ -181,7 +188,7 @@ fun TimeInput(value: String, placeholder: String = "", modifier: Modifier = Modi
             placeholder = { Text(placeholder, fontSize = 13.sp, color = AppC.placeholder) },
             modifier = Modifier.fillMaxWidth(),
         )
-        Box(Modifier.matchParentSize().clickable { open = true })
+        Box(Modifier.matchParentSize().clickable { tickHaptic(hapticCtx, HapticKind.TAP); open = true })
     }
     if (open) AppTimePickerDialog("选择时间", value, onDismiss = { open = false }, onConfirm = { onValueChange(it); open = false })
 }

@@ -9,6 +9,9 @@
       换句话说：这个应用从权限层面就没有能力往 /sdcard 之类的公共目录写东西，
       任何出现在那里的文件都不可能是它产生的（导出的 .md 除外，那是用户自己选的落点）。
     -->
+    <!-- 触觉反馈（点击"哒"一下）：Vibrator.vibrate() 一律校验此权限，缺了会直接抛 SecurityException 崩 App。
+         这是"普通权限"，安装即授予，不会弹窗问用户。 -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- 通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- 按点提醒必须要精确闹钟；缺少这条声明会让 AlarmManager 退化成非精确闹钟（可偏移1小时） -->

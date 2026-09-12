@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
@@ -41,6 +42,7 @@ fun ColorPickerDialog(
     onDismiss: () -> Unit,
     onConfirm: (Color) -> Unit,
 ) {
+    val hapticCtx = LocalContext.current
     val start = remember(initial) { colorToHsv(initial) }
     var hue by remember(initial) { mutableFloatStateOf(start.first) }
     var sat by remember(initial) { mutableFloatStateOf(start.second) }
@@ -69,12 +71,12 @@ fun ColorPickerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(picked) }) {
+            TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onConfirm(picked) }) {
                 Text("确定", color = AppC.accent)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = AppC.textMuted) }
+            TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消", color = AppC.textMuted) }
         },
     )
 }

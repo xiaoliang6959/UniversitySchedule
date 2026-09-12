@@ -31,7 +31,7 @@ import androidx.compose.animation.core.Easing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,7 +41,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 // 颜色插值：周次胶囊选中态淡入淡出用（显式导入，避免和 animation.core 的通配 lerp 重载打架）
 import androidx.compose.ui.graphics.lerp
@@ -153,6 +155,9 @@ fun ScheduleApp(
     // 内部（见 MainPage 的 ModalNavigationDrawer）。抽屉不在子页面的组件树里，
     // 所以子页面既滑不出抽屉、也压不住返回键。
     val drawerState = remember { EdgeDrawerState() }
+    // 抽屉开、关都"哒"一下。挂在 animateTo 上：汉堡键、边缘手势、点遮罩三条路径全覆盖。
+    // 汉堡按钮自己**不再**单独震 —— 否则一次点击会响两下。
+    drawerState.onOpenStateChanged = { tickHaptic(context, HapticKind.TOGGLE) }
     val drawerScope = rememberCoroutineScope()
 
     // 导航栈：进页 push、返回 pop，返回目标永远是来源页
@@ -292,7 +297,7 @@ fun ScheduleApp(
             courses = emptyList()
             config = ScheduleConfig()
             refreshKey++
-        }, onDeveloper = { navigateTo("developer") })
+        }, onDeveloper = { navigateTo("developer") }, onHaptic = { navigateTo("haptic") })
         "about" -> AboutPage({ backFromCurrent() })
         "timeTable" -> TimeTableSettingsPage(dataPrefs, { backFromCurrent(refresh = true) }, { refreshKey++ }, slots)
         "reminder" -> ReminderPage(prefs, dataPrefs, courses, config, slots, { backFromCurrent(); rearm() }, rearm, reminderVersion)
@@ -300,6 +305,7 @@ fun ScheduleApp(
         "manual" -> ManualPage({ backFromCurrent() })
         "appearance" -> AppearancePage(prefs, { backFromCurrent() }, onEditBgPosition = { navigateTo("bgFit") })
         "bgFit" -> BgImagePositionPage({ backFromCurrent() })
+        "haptic" -> HapticPage({ backFromCurrent() })
         "developer" -> DeveloperPage({ backFromCurrent() }, onDataReload = reloadData)
         }
     }
@@ -318,7 +324,9 @@ fun ScheduleApp(
                 }
             },
             text = {
-                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState())) {
                     list.forEachIndexed { idx, c ->
                         if (idx > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         Text(c.name, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -331,7 +339,7 @@ fun ScheduleApp(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showDetailCourses = null }) { Text("关闭") } }
+            confirmButton = { TextButton(onClick = { tickHaptic(context, HapticKind.TAP); showDetailCourses = null }) { Text("关闭") } }
         )
     }
 }
@@ -348,8 +356,11 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
              onHoliday: () -> Unit = {}, holidays: List<HolidayItem> = emptyList(),
              onManual: () -> Unit = {}, onAppearance: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
+    // 触觉反馈用的 Context 必须在 Composable 层先取好：onClick 是非 Composable lambda，
+    // 里面直接写 LocalContext.current 会报 "@Composable invocations can only happen..."
+    val hapticCtx = LocalContext.current
     // 这里只读提醒配置（属于"设置类"），所以固定用真实文件，不随测试课表切换
-    val prefs = LocalContext.current.getSharedPreferences(TestSchedule.REAL_PREFS, Context.MODE_PRIVATE)
+    val prefs = hapticCtx.getSharedPreferences(TestSchedule.REAL_PREFS, Context.MODE_PRIVATE)
     val reminderConfig = loadReminderConfig(prefs)
     // 抽屉只属于主页面：它是"主页"整体的一部分，进出子页时抽屉跟着主页一起滑走/滑回，
     // 开合状态不变——所以返回主页面"一打开就带着抽屉"，不用先关再补一个打开动画。
@@ -362,9 +373,13 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
     EdgeDrawer(
         state = drawerState,
         drawer = {
-            Row(Modifier.fillMaxWidth().padding(20.dp, 24.dp, 20.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier
+                .fillMaxWidth()
+                .padding(20.dp, 24.dp, 20.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painter = painterResource(id = R.drawable.ic_about), contentDescription = "Logo",
-                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)))
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp)))
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("大学课程表", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = AppC.textPrimary)
@@ -372,43 +387,69 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                 }
             }
             Spacer(Modifier.height(4.dp))
-            // 菜单列表单独滚动：分屏上下被压得很矮时，八项菜单一屏放不下，
+            // 菜单列表单独滚动：分屏上下被压得很矮时，六项菜单一屏放不下，
             // 以前整列排布、超出的部分既看不见也滚不动（用户直接够不到下面的项）。
-            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-            // 一律只留标题：解释性文字和数量统计都收进「使用手册」/各自页面里看
-            DrawerMenuItem(icon = Icons.Default.Info, label = "学期设置", onClick = { onGeneralInfo() })
-            DrawerMenuItem(icon = Icons.Default.AccessTime, label = "时间表设置", onClick = { onTimeTable() })
-            DrawerMenuItem(icon = Icons.Default.Edit, label = "课程管理", onClick = { onManage() })
-            DrawerMenuItem(icon = Icons.Default.EventAvailable, label = "节假日设置", onClick = { onHoliday() })
-            DrawerMenuItem(icon = Icons.Default.NotificationsActive, label = "上课提醒", onClick = { onReminder() })
-            // 侧边菜单里叫「外观」（页面标题仍是「外观设置」）：菜单项都取短词，与「设置」并列更整齐
+            Column(Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())) {
+            // 一律只留标题：解释性文字和数量统计都收进「帮助」/各自页面里看
+            DrawerMenuItem(icon = Icons.Default.Info, label = "学期", onClick = { onGeneralInfo() })
+            DrawerMenuItem(icon = Icons.Default.AccessTime, label = "时间表", onClick = { onTimeTable() })
+            DrawerMenuItem(icon = Icons.Default.Edit, label = "课程安排", onClick = { onManage() })
+            DrawerMenuItem(icon = Icons.Default.EventAvailable, label = "节假日", onClick = { onHoliday() })
+            DrawerMenuItem(icon = Icons.Default.NotificationsActive, label = "通知", onClick = { onReminder() })
+            // 侧边菜单里叫「外观」（页面标题仍是「外观设置」）：菜单项都取短词，更整齐
             DrawerMenuItem(icon = Icons.Default.Palette, label = "外观", onClick = { onAppearance() })
-            DrawerMenuItem(icon = Icons.Default.Settings, label = "设置", onClick = { onSettings() })
-            DrawerMenuItem(icon = Icons.AutoMirrored.Filled.MenuBook, label = "使用手册", onClick = { onManual() })
             }
             // 左下角快捷切换深色模式：点一下按 跟随系统 → 深色 → 浅色 循环。
             // 图标即当前状态：手机=跟随系统、月亮=深色、太阳=浅色（不必进设置页就能确认/切换）
             // 这一行**常驻左下角**：不跟着菜单列表滚，分屏只剩一条缝时也在。
             HorizontalDivider(color = AppC.divider)
             Row(
-                Modifier.fillMaxWidth().padding(8.dp, 8.dp, 16.dp, 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp, 8.dp, 16.dp, 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 val nextMode = when (AppC.mode) {
-                    0 -> 2      // 跟随系统 → 深色
-                    2 -> 1      // 深色 → 浅色
-                    else -> 0   // 浅色 → 跟随系统
+                    0 -> 1      // 跟随系统 → 浅色
+                    1 -> 2      // 浅色 → 深色
+                    else -> 0   // 深色 → 跟随系统
                 }
-                val (modeIcon, modeDesc) = when (AppC.mode) {
-                    0 -> Icons.Default.PhoneAndroid to "深色模式：跟随系统（点按切换）"
-                    2 -> Icons.Default.DarkMode to "深色模式：深色（点按切换）"
-                    else -> Icons.Default.LightMode to "深色模式：浅色（点按切换）"
+                // 「跟随系统」跟的是系统当前的深浅 → 图标也应该跟着换：
+                // 系统浅色 = 太阳 + A，系统深色 = 月牙 + A（都是自绘的 VectorDrawable）。
+                // Material 的 brightness_auto / mode 是"星芒轮廓里塞个 A"，
+                // 抽象、又和旁边的日/月不是一族造型，所以这两个用自绘的。
+                val systemDark = isSystemInDarkTheme()
+                val modeDesc = when (AppC.mode) {
+                    0 -> "深色模式：跟随系统（点按切换）"
+                    1 -> "深色模式：浅色（点按切换）"
+                    else -> "深色模式：深色（点按切换）"
                 }
                 IconButton(onClick = {
+                    tickHaptic(hapticCtx, HapticKind.TOGGLE)
                     AppC.mode = nextMode
                     prefs.edit().putInt("dark_mode", nextMode).apply()
                 }) {
-                    Icon(modeIcon, modeDesc, tint = AppC.textMuted, modifier = Modifier.size(22.dp))
+                    when (AppC.mode) {
+                        0 -> Icon(
+                            painterResource(
+                                if (systemDark) R.drawable.ic_theme_auto_dark
+                                else R.drawable.ic_theme_auto_light
+                            ),
+                            modeDesc, tint = AppC.textMuted, modifier = Modifier.size(22.dp),
+                        )
+                        1 -> Icon(painterResource(R.drawable.ic_lightmode), modeDesc, tint = AppC.textMuted, modifier = Modifier.size(22.dp))
+                        else -> Icon(painterResource(R.drawable.ic_darkmode), modeDesc, tint = AppC.textMuted, modifier = Modifier.size(22.dp))
+                    }
+                }
+                IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onManual() }, modifier = Modifier.offset(x = (-12).dp)) {
+                    Icon(Icons.AutoMirrored.Filled.Help, "帮助", tint = AppC.textMuted, modifier = Modifier.size(22.dp))
+                }
+                // 设置：图标按钮，紧跟帮助按钮，便于快速进导入/导出/清空
+                IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onSettings() }, modifier = Modifier.offset(x = (-24).dp)) {
+                    Icon(Icons.Default.Settings, "设置", tint = AppC.textMuted, modifier = Modifier.size(22.dp))
                 }
             }
         },
@@ -466,6 +507,9 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
         val jumpTx = remember { Animatable(0f) }
         val jumpAlpha = remember { Animatable(1f) }
         var jumpJob by remember { mutableStateOf<Job?>(null) }
+        // 跨周过场是否在进行。用 remember 固定 lambda 实例（只在绘制期读，不进组合参数），
+        // 供 WeekLayer 决定要不要把邻居层藏起来 —— 见 WeekLayer 里 alpha 那段的说明。
+        val jumpActive = remember { { jumpTx.value != 0f || jumpAlpha.value < 1f } }
         // 周次胶囊"点选跳周"时的选中态交叉淡变（0=旧周实心，1=新周实心）。
         // 以前这套状态住在 WeekChipBar 里、靠 LaunchedEffect(currentWeek) 启动 —— 那个 effect
         // 总要等下一帧才跑，于是换周那一帧会先用旧进度画一次：目标胶囊先亮满一帧、下一帧又
@@ -514,27 +558,54 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                 jumpJob?.cancel()
                 setDragNow(0f)
                 val dir = if (step > 0) 1 else -1
+                // 位移基准。pageW 是实测容器宽度（首帧测量后就该有值）；万一仍是 0
+                // （冷启动/窗口切换的极端时序），退回屏幕宽度 —— 否则位移 = pageW × 0.5 = 0，
+                // 跳周会退化成"只淡不滑"，看起来就是"没有动画"，而且是偶发的。
+                val jumpW = if (pageW > 0f) pageW
+                            else hapticCtx.resources.displayMetrics.widthPixels.toFloat()
                 // 胶囊淡变的基准先摆到"出发那一周"（起点值 0 由作业在换周前才写，
                 // 此前 chipTapFrom 仍等于当前周，所以画面不变）
                 chipTapFrom = from
                 jumpJob = scope.launch {
-                    // 交变起点先归零：此时还没换周（chipTapFrom == currentWeek），画面不变，
-                    // 目的是让换周后那一帧就是"旧周实心、新周空"的干净起点。
+                    // ① **先归位**。上一次跳周可能被中途打断（动画没跑完用户又点了胶囊，
+                    //    jumpJob?.cancel() 会让 Animatable 停在半路），若不复位，这一跳就从
+                    //    半路起步：位移只剩一小段、淡变也只剩一小截 → 表现就是"偶发掉动画"。
+                    //    归位后无论上一次停在哪，这一跳都是完整的"滑出 → 换周 → 滑入"。
+                    jumpTx.snapTo(0f)
+                    jumpAlpha.snapTo(1f)
+                    // ② 胶囊交变起点归零：此时还没换周（chipTapFrom == currentWeek），画面不变，
+                    //    目的是让换周后那一帧就是"旧周实心、新周空"的干净起点。
                     chipTap.snapTo(0f)
-                    // 退出：朝行进方向滑出 + 淡出（淡到几乎看不见，换周那一帧正好藏在里面）
+                    // 退出：朝行进方向滑出 + 淡出（淡到完全看不见，换周那一帧正好藏在里面）
                     kotlinx.coroutines.coroutineScope {
-                        launch { jumpTx.animateTo(-dir * pageW * JUMP_SLIDE, tween(JUMP_EXIT_MS, easing = FlipEasing)) }
+                        launch { jumpTx.animateTo(-dir * jumpW * JUMP_SLIDE, tween(JUMP_EXIT_MS, easing = FlipEasing)) }
                         launch { jumpAlpha.animateTo(JUMP_ALPHA_MIN, tween(JUMP_EXIT_MS, easing = FlipEasing)) }
                     }
                     onWeekChange(to)
-                    // 换周后把胶囊淡过去（相邻周那条路由 settle 的残余偏移逐帧驱动，同款观感）
-                    chipTap.animateTo(1f, tween(CHIP_FADE_MS, easing = FlipEasing))
-                    chipTapFrom = to
-                    // 进场：换到另一侧，再滑回来 + 淡入
-                    jumpTx.snapTo(dir * pageW * JUMP_SLIDE)
+                    // 换周这一帧要重组课表层（几百个结点），是整段过场里最重的一帧之一。
+                    // 此刻 alpha 已经是 0（完全透明），所以先让一两帧过去、把重组落定，
+                    // 再起步进场 —— 否则这口重活会把进场动画的头几帧吃掉，
+                    // 表现出来就是"这一跳像没播动画"（冷启动首次跳周尤其明显，因为那时最重）。
+                    withFrameNanos { }
+                    withFrameNanos { }
+                    // 进场：换到另一侧，再滑回来 + 淡入。
+                    //
+                    // ⚠️ 胶囊淡变必须**和进场并行**，不能 await 它：
+                    // 它时长 300ms，比"滑出(130)+滑入(200)"还长；原来先 await 它再滑入，
+                    // 于是滑出与滑入之间被卡出一个 300ms 的**静止停顿** ——
+                    // 那段时间课表停在半屏外、alpha 只有 0.1（隐约可见），
+                    // 看着就是一层"残影"（用户截图的 1.33s~1.65s 正是这一段）。
+                    jumpTx.snapTo(dir * jumpW * JUMP_SLIDE)
                     kotlinx.coroutines.coroutineScope {
                         launch { jumpTx.animateTo(0f, tween(JUMP_ENTER_MS, easing = FlipEasing)) }
                         launch { jumpAlpha.animateTo(1f, tween(JUMP_ENTER_MS, easing = FlipEasing)) }
+                        launch {
+                            // 相邻周那条路由 settle 的残余偏移逐帧驱动，同款观感
+                            chipTap.animateTo(1f, tween(CHIP_FADE_MS, easing = FlipEasing))
+                            // 淡变结束后才把基准落到新周：提前落会让 chipFill 走进
+                            // "chipTapFrom == currentWeek" 分支 → 交叉淡变失效、变成硬切
+                            chipTapFrom = to
+                        }
                     }
                 }
                 return
@@ -552,12 +623,17 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
             settle(start, (FLIP_MS * frac).toInt().coerceIn(280, FLIP_MS), FlipEasing)
         }
         Column(
-            Modifier.fillMaxSize().background(AppC.bg)
+            Modifier
+                .fillMaxSize()
+                .background(AppC.bg)
                 .onSizeChanged { if (it.width > 0) pageW = it.width.toFloat() }
                 .onGloballyPositioned { columnTopY = it.localToRoot(Offset.Zero).y }
                 .pointerInput(maxShownWeek, switchPx) {
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial
+                        )
                         // 手指重新按下 → 从当前位置继续拖（连滑），并锁住补间不让它抢写
                         dragActive = true
                         settleJob?.cancel()      // 落定补间到此为止，否则它会迟到地把偏移写回来
@@ -572,6 +648,7 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                         val baseX = dragNow()   // 本次手势的起点偏移（accX 会被逐帧累加覆盖）
                         var accY = 0f
                         var mode = 0            // 0=未判定 1=切周 2=左缘开抽屉 -1=交还竖向
+                        var edgeTicked = false    // 本次手势是否已为"压到首/末周边界"响过（一次手势最多一次）
                         val slop = viewConfiguration.touchSlop
                         val startX = down.position.x
                         // 只有从"课程显示区域"起手的横滑才用来切周；日期行及以上（标题栏、下一节课条、
@@ -606,9 +683,19 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                                             drawerState.progress = (tdx / drawerW).coerceIn(0f, 1f)
                                         }
                                         if (mode == 1) {
-                                            velocity = tdx / (ch.uptimeMillis - down.uptimeMillis).coerceAtLeast(1L) * 1000f
+                                            velocity =
+                                                tdx / (ch.uptimeMillis - down.uptimeMillis).coerceAtLeast(
+                                                    1L
+                                                ) * 1000f
                                             val lim = if (pageW > 0f) pageW else Float.MAX_VALUE
-                                            setDragNow((baseX + tdx).coerceIn(-lim, lim))
+                                            val target = (baseX + tdx).coerceIn(-lim, lim)
+                                            // 这一路没有 move 事件，走不到上面那段拖动逻辑，边界提示在这里补一次
+                                            if ((target < 0f && weekAt(1) == latestWeek.value) ||
+                                                (target > 0f && weekAt(-1) == latestWeek.value)
+                                            ) {
+                                                if (kotlin.math.abs(tdx) > slop) tickHaptic(hapticCtx, HapticKind.SLIDE)
+                                            }
+                                            setDragNow(target)
                                         }
                                         if (mode > 0) ch.consume()
                                     }
@@ -628,7 +715,8 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                             // "划出去又拖回来"被误判成猛甩 → 周次乱跳、不跟手。
                             if (dt >= 8f) {
                                 val inst = dx / dt * 1000f
-                                velocity = if (velocity == 0f) inst else velocity * 0.5f + inst * 0.5f
+                                velocity =
+                                    if (velocity == 0f) inst else velocity * 0.5f + inst * 0.5f
                             }
                             if (mode == 0) {
                                 if (kotlin.math.abs(accX) > slop || accY > slop) {
@@ -662,8 +750,23 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                                     accX = accX.coerceIn(-lim, lim)
                                     // 到头了就给个阻尼，让"下一周没有了"有手感反馈
                                     val atEdge = (accX < 0f && weekAt(1) == latestWeek.value) ||
-                                        (accX > 0f && weekAt(-1) == latestWeek.value)
-                                    setDragNow(if (atEdge) (accX * 0.25f).coerceIn(-lim, lim) else accX)
+                                            (accX > 0f && weekAt(-1) == latestWeek.value)
+                                    // 已经在首/末周还继续往外滑 → **拖动中**就响（轻划也响，不要求过翻页阈值）。
+                                    // touchSlop 作最小行程（手抖不误触）；**一次手势最多响一次** ——
+                                    // edgeTicked 只在手势开始时复位（它声明在 awaitEachGesture 里），
+                                    // 所以同一次拖拽里一直压着边界也只响开头那一下，松手再拖会重新响。
+                                    if (atEdge && kotlin.math.abs(accX) > slop) {
+                                        if (!edgeTicked) {
+                                            tickHaptic(hapticCtx, HapticKind.SLIDE)
+                                            edgeTicked = true
+                                        }
+                                    }
+                                    setDragNow(
+                                        if (atEdge) (accX * 0.25f).coerceIn(
+                                            -lim,
+                                            lim
+                                        ) else accX
+                                    )
                                 } else if (mode == 2) {
                                     // 抽屉跟手：手指移到哪，抽屉就开到哪（左边缘起手，位移即进度）。
                                     // 只写这一颗状态，EdgeDrawer 用 graphicsLayer 平移渲染
@@ -686,7 +789,8 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                             val moveX = (dragNow() - baseX).coerceIn(-pageW, pageW)
                             // 甩动只在「方向和拖拽一致」时加成。手指划出去又拖回来时
                             // moveX≈0 但残留速度可能很大，否则会凭空翻一页。
-                            val fling = if (moveX == 0f || velocity * moveX > 0f) velocity * 0.08f else 0f
+                            val fling =
+                                if (moveX == 0f || velocity * moveX > 0f) velocity * 0.08f else 0f
                             val projected = (moveX + fling).coerceIn(-pageW, pageW)
                             // 只用「位移 + 甩动预测」一条通道判定。
                             // 之前另加了一条"拖开一点 + 速度够猛就翻页"的纯速度通道，
@@ -697,9 +801,14 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
                                 else -> latestWeek.value
                             }
                             if (to == latestWeek.value) {
+                                // 边界提示不在这里发 —— 已经挪到拖动过程中（见上面 atEdge 那段），
+                                // 放在松手判定里会要求行程过翻页阈值，轻划就漏掉了。
                                 // 没翻页 → 连本次行程加上之前残留的偏移一起回弹到 0
                                 settle(dragNow(), SNAP_BACK_MS, SnapBackEasing)
                             } else {
+                                // 成功翻到另一周 → 震一下（和上面"压到首/末周"的边界提示互斥：
+                                // 翻成了走这里，没翻成才走那边的 settle）
+                                tickHaptic(hapticCtx, HapticKind.SLIDE)
                                 goToWeek(to)
                             }
                         } else if (dragNow() != 0f) {
@@ -713,9 +822,15 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
         ) {
             // 标题栏（带汉堡按钮）
             Surface(color = AppC.headerBlue, modifier = Modifier.fillMaxWidth()) {
-                Box(modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars).fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth().padding(4.dp, if (inMultiWindow) 28.dp else 6.dp, 16.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .fillMaxWidth()) {
+                    Row(Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp, if (inMultiWindow) 28.dp else 6.dp, 16.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = {
+                            // 震动不在这里发：抽屉真正开合时会走 onOpenStateChanged 震一次，
+                            // 两处都发会响两下。
                             // 汉堡键走补间打开（手势那条路子才需要跟手）
                             scope.launch { drawerState.animateTo(1f) }
                         }) { Icon(Icons.Default.Menu, "菜单", tint = AppC.headerText, modifier = Modifier.size(24.dp)) }
@@ -768,7 +883,8 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
             val tableContent: @Composable (Int) -> Unit = remember {
                 { w ->
                     Box(
-                        Modifier.fillMaxSize()
+                        Modifier
+                            .fillMaxSize()
                             .windowInsetsPadding(WindowInsets.navigationBars)
                             // 课程显示区域的顶边（表头日期行以下）→ 切周手势的分界线
                             .onGloballyPositioned { gridTopY = it.localToRoot(Offset.Zero).y }
@@ -780,16 +896,21 @@ fun MainPage(courses: List<Course>, config: ScheduleConfig, currentWeek: Int,
             // 课表背景图：整个课表区（表头 + 格子）的最底下一层静态图层。
             // 不跟着翻页动 —— 前景的格子/表头是半透明的，翻周次时像卡片从图上滑过，
             // 图本身只绘制一次，不参与逐帧合成。
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(Modifier
+                .weight(1f)
+                .fillMaxWidth()) {
                 ScheduleBackground()
                 WeekPager(
                     week = currentWeek, maxWeek = maxShownWeek, dragState = dragState, pageW = pageW,
                     // 跨周过场：整块（表头日期行 + 课表）一起滑出/滑回并淡入淡出。
                     // 这两个值只在 graphicsLayer 的 lambda 里读 → 过场期间零重组。
-                    modifier = Modifier.fillMaxSize().graphicsLayer {
-                        translationX = jumpTx.value
-                        alpha = jumpAlpha.value
-                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = jumpTx.value
+                            alpha = jumpAlpha.value
+                        },
+                    jumpActive = jumpActive,
                     header = headerContent,
                     table = tableContent,
                 )
@@ -818,7 +939,10 @@ const val CHIP_FADE_MS = 300
 // 要连做十几次课表组合（跨度 16 周就要组合 16 张，反而会卡）。
 const val JUMP_EXIT_MS = 130
 const val JUMP_ENTER_MS = 200
-const val JUMP_ALPHA_MIN = 0.1f   // 淡出到此为止（不归零，避免中间出现"空屏停顿"）
+// 过场淡出的终点。取 0（完全透明）：换周那一帧课表彻底看不见，绝不会残留半透明的"影子"。
+// 早先写 0.1 是因为当时"滑出→滑入"之间还夹着 300ms 的静止停顿，归零会露出空屏；
+// 那个停顿已经去掉（胶囊淡变改为与进场并行），淡出后紧接着就淡入，直接归零更干净。
+const val JUMP_ALPHA_MIN = 0f
 const val JUMP_SLIDE = 0.5f       // 滑出距离 = 屏宽 × 这个比例
 val FlipEasing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 val SnapBackEasing = FlipEasing
@@ -843,6 +967,8 @@ private fun WeekPager(
     dragState: FloatState,
     pageW: Float,
     modifier: Modifier = Modifier,
+    /** 跨周过场是否在进行（绘制期读）。过场期间邻居层要被藏掉，见 [WeekLayer] 的 alpha。 */
+    jumpActive: () -> Boolean = { false },
     header: @Composable (Int) -> Unit,
     table: @Composable (Int) -> Unit,
 ) {
@@ -868,13 +994,18 @@ private fun WeekPager(
             slots[idx] = n
         }
     }
-    // 冷启动首帧只组合"当前周"那一层：每层都是一整张课表（几百个结点 + cellMap），
-    // 三层一起组合等于第一帧多干两倍的活，直接体现在"启动要等两秒"上。
-    // 邻居层等下一帧再补进来 —— 用户不可能在一帧内就开始滑动，而邻居层常驻的意义
-    // 只是"起手第一帧不掉帧"，晚一帧完全不影响。
+    // 进入主页时**只先组合"当前周"那一层**：每层都是一整张课表（几百个结点 + cellMap），
+    // 三层一起组合等于多干两倍的活。
+    //
+    // 邻居层延迟到页面过场结束再补：MainPage 每次进入（冷启动、尤其**从子页返回**）
+    // 都要重新组合一次课表，而返回时正好有 300ms 的滑动过场 ——
+    // 原来"下一帧就补"会让这口重活直接压在过场动画上，表现就是
+    // "卡顿一下、动画像跳了一下才到位"。过场那几百毫秒用户正在看页面滑动，
+    // 不会左右切周，邻居层晚一点补完全无感。
+    // （邻居层常驻的意义只是"起手第一帧不掉帧"，它不该跟过场动画抢帧。）
     var showNeighbors by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        withFrameNanos { }
+        delay(360)          // 略长于页面过场的 300ms
         showNeighbors = true
     }
     Box(modifier.clipToBounds()) {
@@ -889,7 +1020,7 @@ private fun WeekPager(
             key(i) {
                 WeekLayer(
                     dragState = dragState, pageW = pageW, weekState = weekState,
-                    layerWeek = slots[i], header = header, table = table,
+                    layerWeek = slots[i], jumpActive = jumpActive, header = header, table = table,
                 )
             }
         }
@@ -903,22 +1034,36 @@ private fun WeekLayer(
     pageW: Float,
     weekState: State<Int>,
     layerWeek: Int,   // 这一层画的是第几周（层内容固定，不随翻页变）
+    jumpActive: () -> Boolean,
     header: @Composable (Int) -> Unit,
     table: @Composable (Int) -> Unit,
 ) {
     Column(
-        Modifier.fillMaxSize().graphicsLayer {
-            // 这里读的两个状态都是"延后读"：每帧变化只让本层的渲染结点重算
-            // translationX/alpha，不会重组 WeekLayer，更不会重组里面的课表。
-            val d = dragState.floatValue
-            val delta = layerWeek - weekState.value
-            translationX = d + delta * pageW
-            val p = if (pageW > 0f) (kotlin.math.abs(d) / pageW).coerceIn(0f, 1f) else 0f
-            alpha = if (delta == 0) 1f else 0.7f + 0.3f * p
-        }
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                // 这里读的两个状态都是"延后读"：每帧变化只让本层的渲染结点重算
+                // translationX/alpha，不会重组 WeekLayer，更不会重组里面的课表。
+                val d = dragState.floatValue
+                val delta = layerWeek - weekState.value
+                translationX = d + delta * pageW
+                val p = if (pageW > 0f) (kotlin.math.abs(d) / pageW).coerceIn(0f, 1f) else 0f
+                // 邻居层（delta != 0）平时停在 ±1 屏外，靠"跟手拖拽"时露出来才自然。
+                // 但**跨周过场**会把整块课表平移半屏（JUMP_SLIDE = 0.5），半屏位移正好把
+                // 1 屏外的邻居拽进画面，而它此时 alpha 只有 0.7 —— 看着就是一层残影
+                // （用户截图里那个"往左离开的第 11 周"其实是第 10 周，两周边课表很像）。
+                // 过场期间直接把邻居藏掉，只留当前周那一层滑出/滑入。
+                alpha = when {
+                    delta == 0 -> 1f
+                    jumpActive() -> 0f
+                    else -> 0.7f + 0.3f * p
+                }
+            }
     ) {
         header(layerWeek)
-        Box(Modifier.fillMaxWidth().weight(1f)) { table(layerWeek) }
+        Box(Modifier
+            .fillMaxWidth()
+            .weight(1f)) { table(layerWeek) }
     }
 }
 
@@ -950,7 +1095,10 @@ internal fun WeekChipBar(
         val target = with(density) { ((currentWeek - 1) * 78).dp.roundToPx() }
         barState.animateScrollTo((target - halfScreen + 40).coerceAtLeast(0))
     }
-    Row(Modifier.background(AppC.card).fillMaxWidth().horizontalScroll(barState), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier
+        .background(AppC.card)
+        .fillMaxWidth()
+        .horizontalScroll(barState), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         Spacer(Modifier.width(6.dp))
         for (w in 1..maxShownWeek) {
             // 选中态用"浓度"插值而不是布尔切换 → 淡入淡出。
@@ -966,7 +1114,10 @@ internal fun WeekChipBar(
 /** 单个"第N周"胶囊，fill=选中浓度 0..1。 */
 @Composable
 private fun WeekChip(w: Int, fill: Float, onPick: (Int) -> Unit) {
-    Surface(onClick = { onPick(w) }, shape = RoundedCornerShape(16.dp), color = lerp(AppC.card, AppC.accent, fill), border = BorderStroke(1.5.dp, AppC.accent)) {
+    // Context 在胶囊内部取，不要提到 WeekChipBar：那边每帧都因 dragState 重组，
+    // 在那里建 onClick lambda 会让 20 个胶囊跟着逐帧重组（正是上面注释要避的坑）。
+    val hapticCtx = LocalContext.current
+    Surface(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); onPick(w) }, shape = RoundedCornerShape(16.dp), color = lerp(AppC.card, AppC.accent, fill), border = BorderStroke(1.5.dp, AppC.accent)) {
         Text("第${w}周", modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = lerp(AppC.accent, readableOn(AppC.accent), fill), fontSize = 13.sp)
     }
 }
@@ -1012,7 +1163,8 @@ private fun RowScope.WeekHeaderCell(
     isToday: Boolean,
 ) {
     val bg = if (isToday) AppC.todayBg else Color.Transparent
-    Column(modifier = Modifier.weight(1f)
+    Column(modifier = Modifier
+        .weight(1f)
         .padding(start = 2.dp, end = 2.dp, top = 4.dp, bottom = 4.dp)
         .background(bg, RoundedCornerShape(6.dp)),
         horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1026,8 +1178,12 @@ internal fun WeekHeaderView(config: ScheduleConfig, holidays: List<HolidayItem>,
     val wdates = getWeekDates(config, week)
     val wToday = LocalDate.now()
     val wTodayDoW = if (!wToday.isBefore(wdates[0]) && !wToday.isAfter(wdates[6])) wToday.dayOfWeek.value else -1
-    Row(Modifier.background(AppC.tableHeader).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.width(50.dp).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {}
+    Row(Modifier
+        .background(AppC.tableHeader)
+        .fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier
+            .width(50.dp)
+            .padding(vertical = 8.dp), contentAlignment = Alignment.Center) {}
         for (i in 0..6) {
             val offH = holidayOn(holidays, wdates[i])
             val mk = makeupOn(holidays, wdates[i])
@@ -1065,8 +1221,11 @@ fun NextClassBar(courses: List<Course>, config: ScheduleConfig, slots: List<Slot
     // 可点击 Surface 会被 M3 撑到 48dp 最小触控高度，卡片背景只有 40dp，上下各内缩 4dp，
     // 所以纵向 padding 4dp 实际呈现 8dp 缝；横向不会被撑（已是 fillMaxWidth），
     // 直接给 8dp 才能和上下对齐。
-    Surface(onClick = onClick, shape = RoundedCornerShape(12.dp), color = AppC.card,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+    val hapticCtx = LocalContext.current   // onClick 是非 Composable lambda，Context 得先在这里取
+    Surface(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onClick() }, shape = RoundedCornerShape(12.dp), color = AppC.card,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.NotificationsActive, null, tint = AppC.accent, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
@@ -1086,8 +1245,9 @@ fun NextClassBar(courses: List<Course>, config: ScheduleConfig, slots: List<Slot
 @Composable
 fun DrawerMenuItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, subtitle: String = "", onClick: () -> Unit) {
     // subtitle 只给"当前状态"用（几节课、哪种通知方式…）；纯解释性文字一律不写在这里，
-    // 统一收进「使用手册」，否则列表被副文本撑得很啰嗦。
-    Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+    // 统一收进「帮助」，否则列表被副文本撑得很啰嗦。
+    val hapticCtx = LocalContext.current   // onClick 是非 Composable lambda，Context 得先在这里取
+    Surface(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onClick() }, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = AppC.textSecondary, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(16.dp))
@@ -1096,11 +1256,45 @@ fun DrawerMenuItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label:
     }
 }
 
+/**
+ * 课表区的手势信息，供"滑到顶 / 底"的触觉提示使用。
+ *
+ * ## 为什么记手指方向、而不是看滚动位置
+ * 贴边时滚动位置压根不变，"位置有没有变"分不出"还在往外推"和"停着没动"。
+ * 更麻烦的是：**快速点推可能整个手势都落在两次轮询之间**（isScrollInProgress 的
+ * true→false 被整段跳过），任何依赖"观察滚动状态"的判据都会漏掉这次手势 ——
+ * 表现就是"有概率不震"。
+ *
+ * ## 为什么手势结束**不**清零 [fingerDy]
+ * 轮询可能晚于手势结束才跑。清零的话，这次"往外推"就再也读不到了。
+ * 留着它 + 用 [downSeq]（按下才 +1）来复位"已提示过"的标记，就能保证：
+ * 无论轮询什么时候跑，只要上一次手势确实在往外推，就一定提示得到。
+ * 而两次手势之间它是"陈旧值"也无妨 —— 那时标记还没被复位，不会再响。
+ *
+ * 两个字段都只在主线程读写，无需同步。
+ */
+private class TableGestureInfo {
+    /**
+     * 本次手势**累计**的纵向位移，向下为正（手指向下 = 内容往顶部走 = 在往上边界推）。
+     *
+     * 用累计值而不是单帧值：单帧方向会被手指抖动骗过 —— 一次横向滑动的某一帧，
+     * 纵向抖动可能恰好大于横向，那一帧被轮询读到就会误判成"在推边界"，
+     * 于是切周震一次、边界又震一次（用户反馈的"左右滑会震两次"）。
+     * 累计值看的是整个手势的主方向：横向滑得再久、带点斜，纵向总量也追不上横向。
+     */
+    var totalDy = 0f
+    /** 本次手势累计的横向位移，用来判断"这次手势到底是竖着还是横着" */
+    var totalDx = 0f
+    /** 每次按下自增，用来识别"新的一次手势" */
+    var downSeq = 0
+}
+
 // ====== 课程表 ======
 @Composable
 fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<String, Pair<Color, Color>>, slots: MutableList<SlotItem>, onCourseClick: (List<Course>) -> Unit, columnSourceDates: List<LocalDate?> = emptyList(), config: ScheduleConfig = ScheduleConfig()) {
     val ROW_H = 72; val TIME_COL_W = 50; val density = LocalDensity.current
-    val scrW = LocalContext.current.resources.displayMetrics.widthPixels
+    val hapticCtx = LocalContext.current   // 供格子点击的触觉反馈用（onClick 里不能再读 LocalContext）
+    val scrW = hapticCtx.resources.displayMetrics.widthPixels
     val timePx = with(density) { TIME_COL_W.dp.roundToPx() }
     val colDp = with(density) { ((scrW - timePx) / 7).toDp() }
     val totalH = slots.size * ROW_H
@@ -1141,20 +1335,133 @@ fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<St
     // Step 2: find conflict rows for each col
     fun isConflictRow(r: Int, col: Int) = cellMap[r][col].size >= 2
 
-    Column(Modifier.verticalScroll(rememberScrollState())) {
-        Box(Modifier.fillMaxWidth().height(totalH.dp)) {
+    val tableScroll = rememberScrollState()
+    val gestureInfo = remember { TableGestureInfo() }
+    // 上下滑动课表，滑到最顶 / 最底就"哒"一下。
+    //
+    // 规则（用户定义）：**一次手势最多"哒"一次**。
+    //  · 不管当前在哪儿（中间 / 上边界 / 下边界），只要这次手势把课表推到某条边界 → 响一次；
+    //  · 已经在那条边界上、这次手势又继续往同方向推 → 也要响（新的一次手势，重新计一次）。
+    //
+    // ## 为什么不能靠"滚动位置"判断
+    // 贴边时位置压根不变 —— "位置有没有变"分不出"还在往外推"和"停着没动"；
+    // 而且**快速点推可能整个手势落在两次轮询之间**（isScrollInProgress 的 true→false
+    // 被整段跳过，轮询根本观察不到这次手势）。之前两版都栽在这上面，表现就是"有概率不震"。
+    // 现在改成看**手指方向**（由下面那个非消费式观察逐帧记录）：往哪边推是确定的，
+    // 手势也不会丢。lastEdge 只记"现在压在哪条边"，用于判断"刚滑到边上"。
+    // key 里带上 currentWeek：切周会换课程、内容高度随之变化，滚动位置可能被夹到新边界，
+    // 那不是用户"滑到了边上"，重启一次把基准重新记一遍，免得白响一下。
+    LaunchedEffect(tableScroll, currentWeek) {
+        fun edgeOf(v: Int, max: Int): Int = when {
+            max <= 0 -> 0        // 这周课表没超出一屏，不用滚，没有"边"可言
+            v <= 0 -> 1
+            v >= max -> 2
+            else -> 0
+        }
+        var lastEdge = edgeOf(tableScroll.value, tableScroll.maxValue)
+        var tickedEdge = 0      // 本次手势里已经为哪条边响过（0 = 还没响）
+        var seenSeq = gestureInfo.downSeq
+        while (true) {
+            delay(40)
+            // 新的一次按下 → 允许重新提示。
+            // 用"按下"而不是"滚动结束"复位：快速点推可能整个手势都落在两次轮询之间，
+            // 靠"滚动结束"根本观察不到 —— 那正是之前漏震的原因。
+            if (gestureInfo.downSeq != seenSeq) {
+                seenSeq = gestureInfo.downSeq
+                tickedEdge = 0
+            }
+
+            val v = tableScroll.value
+            val edge = edgeOf(v, tableScroll.maxValue)
+
+            // ① 刚滑到某条边（位置变化就能看出来；快速甩动到位也走这条）
+            if (edge != 0 && edge != lastEdge && tickedEdge != edge) {
+                tickHaptic(hapticCtx, HapticKind.SLIDE)
+                tickedEdge = edge
+            }
+
+            // ② 已经在这条边上、手指还在往这个方向推 → 也响（一次手势一次）
+            //
+            // 必须要求"**整个手势**是纵向主导"：
+            //  · 左右滑切周时手指总带一点斜度，只看"纵向不为零"（哪怕只看单帧）都可能把
+            //    切周手势算进来 —— 于是切周震一次、这里又震一次，"在第一周向右滑、手指稍斜"就是这样；
+            //  · 用累计位移判断主方向：横向滑得再远，纵向总量也追不上横向，自然被排除。
+            // 方向也要对：上边界要"手指向下"（内容往顶走）、下边界要"手指向上"。
+            val dy = gestureInfo.totalDy
+            val dx = gestureInfo.totalDx
+            if (edge != 0 && tickedEdge != edge &&
+                dy != 0f && kotlin.math.abs(dy) > kotlin.math.abs(dx)
+            ) {
+                val pushing = (edge == 1 && dy > 0f) || (edge == 2 && dy < 0f)
+                if (pushing) {
+                    tickHaptic(hapticCtx, HapticKind.SLIDE)
+                    tickedEdge = edge
+                }
+            }
+
+            lastEdge = edge
+        }
+    }
+
+    Column(
+        Modifier
+            .verticalScroll(tableScroll)
+            // 非消费式观察手指的纵向方向：只读不吃，滚动手势照常由上面的 verticalScroll 处理。
+            // 用 Initial 阶段（先于滚动消费）读到的是手指原始位移，不会被滚动"吃掉"。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // 按下时先清，免得继承上一次手势的位移
+                    gestureInfo.totalDy = 0f
+                    gestureInfo.totalDx = 0f
+                    gestureInfo.downSeq++
+                    var lastY = down.position.y
+                    var lastX = down.position.x
+                    while (true) {
+                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) break
+                        // 累计整个手势的位移（不只看这一帧）
+                        gestureInfo.totalDy += ch.position.y - lastY
+                        gestureInfo.totalDx += ch.position.x - lastX
+                        lastY = ch.position.y
+                        lastX = ch.position.x
+                    }
+                    // 刻意**不**在这里清零 fingerDy —— 轮询可能晚于手势结束才跑，
+                    // 清零就会把这次"往外推"漏掉（详见 TableGestureInfo 的说明）。
+                }
+            }
+    ) {
+        Box(Modifier
+            .fillMaxWidth()
+            .height(totalH.dp)) {
             // Background + time column
             slots.forEachIndexed { r, si ->
-                if (r % 6 == 0 && r > 0) Box(Modifier.fillMaxWidth().height(8.dp).offset(y = (r * ROW_H).dp).background(AppC.gridDivider))
+                if (r % 6 == 0 && r > 0) Box(Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .offset(y = (r * ROW_H).dp)
+                    .background(AppC.gridDivider))
                 // 左侧时间列与课程区同色；整块课表用"卡片白"，页面的灰底只留在课表外面的空隙里
                 // 开了背景图时这个底色会自动变半透明，让图透出来（见 AppC.tableCell）
-                Box(Modifier.width(TIME_COL_W.dp).offset(y = (r * ROW_H).dp).height(ROW_H.dp).background(AppC.tableCell).padding(2.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier
+                    .width(TIME_COL_W.dp)
+                    .offset(y = (r * ROW_H).dp)
+                    .height(ROW_H.dp)
+                    .background(AppC.tableCell)
+                    .padding(2.dp), contentAlignment = Alignment.Center) {
                     Text(si.name + "\n" + si.startTime + "-" + si.endTime, fontSize = 8.sp, color = AppC.textSecondary, textAlign = TextAlign.Center, lineHeight = 10.sp)
                 }
             }
             for (r in slots.indices) for (c in 0..6) {
                 // 课程区统一一个色，不再按半天交替深浅；用卡片白，灰底只在外面的空隙里
-                Box(Modifier.offset(x = (TIME_COL_W + c * with(density) { colDp.roundToPx() / density.density }).dp, y = (r * ROW_H).dp).size(colDp, ROW_H.dp).background(AppC.tableCell))
+                Box(Modifier
+                    .offset(
+                        x = (TIME_COL_W + c * with(density) { colDp.roundToPx() / density.density }).dp,
+                        y = (r * ROW_H).dp
+                    )
+                    .size(colDp, ROW_H.dp)
+                    .background(AppC.tableCell))
             }
 
             // Step 3: render each cell
@@ -1177,9 +1484,17 @@ fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<St
                     }
                     val span = endRow - r + 1
                     val bg = AppC.warnBg; val fg = AppC.warnText
-                    Box(Modifier.offset(x = xOffset, y = yOffset).width(colDp).height((ROW_H * span).dp)
-                        .padding(2.dp).background(bg, RoundedCornerShape(8.dp)).padding(3.dp)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onCourseClick(list) }, contentAlignment = Alignment.Center) {
+                    Box(Modifier
+                        .offset(x = xOffset, y = yOffset)
+                        .width(colDp)
+                        .height((ROW_H * span).dp)
+                        .padding(2.dp)
+                        .background(bg, RoundedCornerShape(8.dp))
+                        .padding(3.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { tickHaptic(hapticCtx, HapticKind.SELECT); onCourseClick(list) }, contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("\u8BFE\u7A0B\u51B2\u7A81", color = fg, fontSize = 11.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, lineHeight = 13.sp)
                             Text("${unique.size}\u95E8\u51B2\u7A81", color = fg.copy(alpha = 0.8f), fontSize = 9.sp)
@@ -1199,12 +1514,19 @@ fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<St
                         h++
                     }
                     if (h == 0) h = 1
-                    Box(Modifier.offset(x = xOffset, y = (r * ROW_H).dp)
-                        .width(colDp).height((ROW_H * h).dp).padding(2.dp)
+                    Box(Modifier
+                        .offset(x = xOffset, y = (r * ROW_H).dp)
+                        .width(colDp)
+                        .height((ROW_H * h).dp)
+                        .padding(2.dp)
                         // 色块填充走 AppC.blockFill：开了背景图才按用户设的透明度变淡，
                         // 没开图时原样返回（= 现在的样子）。文字颜色不受影响，始终不透明。
-                        .background(AppC.blockFill(bg), RoundedCornerShape(8.dp)).padding(3.dp)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onCourseClick(listOf(c)) }, contentAlignment = Alignment.Center) {
+                        .background(AppC.blockFill(bg), RoundedCornerShape(8.dp))
+                        .padding(3.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { tickHaptic(hapticCtx, HapticKind.SELECT); onCourseClick(listOf(c)) }, contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Text(c.name, color = fg, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 5, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 11.sp)
                             Spacer(Modifier.height(2.dp))
@@ -1217,7 +1539,11 @@ fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<St
 
             val special = courses.filter { currentWeek in it.weekStart..it.weekEnd && it.room == "-" }
             if (special.isNotEmpty()) {
-                Box(Modifier.fillMaxWidth().offset(y = (totalH + 8).dp).background(AppC.gridAlt).padding(12.dp, 8.dp)) {
+                Box(Modifier
+                    .fillMaxWidth()
+                    .offset(y = (totalH + 8).dp)
+                    .background(AppC.gridAlt)
+                    .padding(12.dp, 8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column {
                             Text("其他安排", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppC.textSecondary)
@@ -1234,6 +1560,7 @@ fun CourseTable(courses: List<Course>, currentWeek: Int, colorMap: MutableMap<St
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, onBack: () -> Unit, onCourseClick: (String) -> Unit, onAddCourse: () -> Unit, colorMap: MutableMap<String, Pair<Color, Color>>, refreshKey: Int, onSwapCourses: (Int, Int) -> Unit = { _, _ -> }) {
+    val hapticCtx = LocalContext.current
     val schedules = remember(courses) { courses.toSchedules() }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingCourse by remember { mutableStateOf<CourseSchedule?>(null) }
@@ -1255,25 +1582,25 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
             if (multiSelectMode) {
                 TopAppBar(
                     title = { Text("已选择 ${selectedNames.size} 项") },
-                    navigationIcon = { IconButton(onClick = { multiSelectMode = false; selectedNames = emptySet() }) { Icon(Icons.Default.Close, "退出多选") } },
+                    navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); multiSelectMode = false; selectedNames = emptySet() }) { Icon(Icons.Default.Close, "退出多选") } },
                     actions = {
-                        IconButton(onClick = { selectedNames = if (allSelected) emptySet() else schedules.map { it.name }.toSet() }) { Icon(if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank, "全选") }
-                        IconButton(onClick = { pendingDeleteNames = selectedNames.toList() }) { Icon(Icons.Default.Delete, "删除选中", tint = AppC.danger) }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); selectedNames = if (allSelected) emptySet() else schedules.map { it.name }.toSet() }) { Icon(if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank, "全选") }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteNames = selectedNames.toList() }) { Icon(Icons.Default.Delete, "删除选中", tint = AppC.danger) }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText, actionIconContentColor = AppC.headerText)
                 )
             } else {
-                TopAppBar(title = { Text("课程管理（${schedules.size}门）") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
+                TopAppBar(title = { Text("课程管理（${schedules.size}门）") }, navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
             }
         },
         floatingActionButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
                 if (!multiSelectMode) {
-                    FloatingActionButton(onClick = { multiSelectMode = true }, containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill)) {
+                    FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); multiSelectMode = true }, containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill)) {
                         Icon(Icons.Default.Checklist, "多选", tint = readableOn(AppC.accentFill))
                     }
                 }
-                FloatingActionButton(onClick = { showAddDialog = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加课程", tint = Color.White) }
+                FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); showAddDialog = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加课程", tint = Color.White) }
             }
         }
     ) { padding ->
@@ -1284,16 +1611,28 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
             items(schedules.size) { i ->
                 val sch = schedules[i]; val (bg, fg) = getCourseColor(sch.name, sch.color, colorMap, i)
                 val checked = selectedNames.contains(sch.name)
-                Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()
-                    .then(if (multiSelectMode) Modifier else Modifier.dragToReorder(dragState, i, schedules.size, extraPx = dragPitch) { from, d -> moveCourseAt(from, d) })
+                Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (multiSelectMode) Modifier else Modifier.dragToReorder(
+                            dragState,
+                            i,
+                            schedules.size,
+                            extraPx = dragPitch
+                        ) { from, d -> moveCourseAt(from, d) })
                     // indication=null：去掉整卡按压高亮，否则长按拖拽期间卡片蒙一层深灰"状态层"
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    if (multiSelectMode) {
-                        selectedNames = if (checked) selectedNames - sch.name else selectedNames + sch.name
-                    } else {
-                        onCourseClick(sch.name)
-                    }
-                }) {
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (multiSelectMode) tickHaptic(hapticCtx, HapticKind.SELECT) else tickHaptic(hapticCtx, HapticKind.TAP)
+                        if (multiSelectMode) {
+                            selectedNames =
+                                if (checked) selectedNames - sch.name else selectedNames + sch.name
+                        } else {
+                            onCourseClick(sch.name)
+                        }
+                    }) {
                     Column(Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (multiSelectMode) {
@@ -1304,8 +1643,8 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
                             Surface(shape = RoundedCornerShape(6.dp), color = bg) { Text(sch.name, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = fg, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
                             Spacer(Modifier.weight(1f))
                             if (!multiSelectMode) {
-                                IconButton(onClick = { editingCourse = sch }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
-                                IconButton(onClick = { pendingDeleteNames = listOf(sch.name) }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
+                                IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); editingCourse = sch }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
+                                IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteNames = listOf(sch.name) }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
                             }
                         }
                         Spacer(Modifier.height(4.dp)); Text("${sch.teacher} · ${sch.credit}学分 · ${sch.type} · ${sch.exam}", fontSize = 12.sp, color = AppC.textMuted); Text("${sch.slots.size}个时间段", fontSize = 11.sp, color = AppC.accent)
@@ -1323,17 +1662,19 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
             title = { Text("确认删除") },
             text = { Text("确定要删除 ${pendingDeleteNames.size} 门课程吗？此操作不可撤销。") },
             confirmButton = { TextButton(onClick = {
+                tickHaptic(hapticCtx, HapticKind.TAP)
                 val u = courses.toMutableList()
                 u.removeAll { c -> pendingDeleteNames.any { it == c.name } }
                 saveCoursesToPrefs(prefs, u)
                 pendingDeleteNames = emptyList()
                 multiSelectMode = false; selectedNames = emptySet(); onAddCourse()
             }) { Text("删除", color = AppC.danger) } },
-            dismissButton = { TextButton(onClick = { pendingDeleteNames = emptyList() }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteNames = emptyList() }) { Text("取消") } }
         )
     }
 
     if (showAddDialog) AddCourseDialog(onDismiss = { showAddDialog = false }, onConfirm = { n, t, cr, un ->
+        tickHaptic(hapticCtx, HapticKind.TAP)
         val updated = courses.toMutableList()
         updated.add(Course(n, t, "-", 1, "第1节", 1, 1, "必修", cr, "考查", un, "auto"))
         saveCoursesToPrefs(prefs, updated)
@@ -1343,6 +1684,7 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
 
     editingCourse?.let { sch ->
         EditCourseDialog(sch = sch, onDismiss = { editingCourse = null }, onConfirm = { n, t, cr, un, clr, ex ->
+            tickHaptic(hapticCtx, HapticKind.TAP)
             val updated = courses.toMutableList()
             val newFlat = sch.copy(name = n, teacher = t, credit = cr, unit = un, color = clr, exam = ex).toFlatCourses()
             val payload = if (newFlat.isEmpty()) listOf(Course(n, t, "-", 1, "第1节", 1, 1, "必修", cr, ex, un, clr)) else newFlat
@@ -1357,16 +1699,18 @@ fun ManagePage(courses: List<Course>, prefs: android.content.SharedPreferences, 
 
 @Composable
 fun AddCourseDialog(onDismiss: () -> Unit, onConfirm: (String, String, Double, String) -> Unit) {
+    val hapticCtx = LocalContext.current
     var name by remember { mutableStateOf("") }; var teacher by remember { mutableStateOf("") }; var credit by remember { mutableStateOf("2.0") }; var unit by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = onDismiss, containerColor = AppC.card, shape = RoundedCornerShape(16.dp), title = { Text("添加课程") },
         text = { Column { FormField("课程名称", name) { name = it }; FormField("任课教师", teacher) { teacher = it }; FormField("学分", credit) { credit = it }; FormField("开课单位", unit) { unit = it } } },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), teacher.trim(), credit.toDoubleOrNull() ?: 2.0, unit.trim()) }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+        confirmButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); if (name.isNotBlank()) onConfirm(name.trim(), teacher.trim(), credit.toDoubleOrNull() ?: 2.0, unit.trim()) }) { Text("确定") } },
+        dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消") } })
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditCourseDialog(sch: CourseSchedule, onDismiss: () -> Unit, onConfirm: (String, String, Double, String, String, String) -> Unit) {
+    val hapticCtx = LocalContext.current
     var name by remember { mutableStateOf(sch.name) }
     var teacher by remember { mutableStateOf(sch.teacher) }
     var credit by remember { mutableStateOf(sch.credit.toString()) }
@@ -1409,8 +1753,8 @@ fun EditCourseDialog(sch: CourseSchedule, onDismiss: () -> Unit, onConfirm: (Str
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), teacher.trim(), credit.toDoubleOrNull() ?: sch.credit, unit.trim(), selectedColor, exam.trim()) }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+        confirmButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); if (name.isNotBlank()) onConfirm(name.trim(), teacher.trim(), credit.toDoubleOrNull() ?: sch.credit, unit.trim(), selectedColor, exam.trim()) }) { Text("确定") } },
+        dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消") } })
 
     if (showCoursePicker) {
         ColorPickerDialog(
@@ -1449,6 +1793,7 @@ private fun ColorSwatch(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.content.SharedPreferences, onBack: () -> Unit, onSlotAdded: () -> Unit, colorMap: MutableMap<String, Pair<Color, Color>>, slots: MutableList<SlotItem>, onSwapSlots: (String, Int, Int) -> Unit = { _, _, _ -> }) {
+    val hapticCtx = LocalContext.current   // onClick 是非 Composable lambda，Context 得先在这里取
     val schedule = remember(courses, courseName) { courses.toSchedules().find { it.name == courseName } }
     var showAddSlot by remember { mutableStateOf(false) }
     var showEditSlot by remember { mutableIntStateOf(-1) }
@@ -1457,13 +1802,24 @@ fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.c
     val slotPitch = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx().toFloat() }
     fun moveSlotAt(from: Int, delta: Int) { schedule ?: return; onSwapSlots(courseName, from, delta) }
     Scaffold(
-        topBar = { TopAppBar(title = { Text(courseName) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) },
-        floatingActionButton = { FloatingActionButton(onClick = { showAddSlot = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加时间段", tint = Color.White) } }
+        topBar = { TopAppBar(title = { Text(courseName) }, navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) },
+        floatingActionButton = { FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); showAddSlot = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加时间段", tint = Color.White) } }
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        Column(Modifier
+            .padding(padding)
+            .fillMaxSize()) {
             schedule?.let { sch ->
-                Surface(color = AppC.card, modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp), shape = RoundedCornerShape(12.dp)) { Column(Modifier.padding(16.dp)) { Text("时间安排", fontSize = 18.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(4.dp)); Text("${sch.teacher} · ${sch.credit}学分 · ${sch.type} · ${sch.exam}", fontSize = 13.sp, color = AppC.textMuted); Text(sch.unit, fontSize = 12.sp, color = AppC.textMuted) } }
-                LazyColumn(contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 80.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(sch.slots.size) { i -> val ts = sch.slots[i]; Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth().dragToReorder(slotDragState, i, sch.slots.size, extraPx = slotPitch) { from, d -> moveSlotAt(from, d) }) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${dayNames[ts.day]}  ${ts.slot}", fontWeight = FontWeight.Bold, fontSize = 14.sp); Text(ts.room, fontSize = 12.sp, color = AppC.textMuted); Text("第${ts.weekStart}~${ts.weekEnd}周", fontSize = 11.sp, color = AppC.textMuted) }; IconButton(onClick = { showEditSlot = i }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }; IconButton(onClick = { val u = courses.toMutableList(); sch.slots.removeAt(i); replaceCourse(u, courseName, sch.toFlatCourses()); saveCoursesToPrefs(prefs, u); onSlotAdded() }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) } } } } }
+                Surface(color = AppC.card, modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp, 8.dp), shape = RoundedCornerShape(12.dp)) { Column(Modifier.padding(16.dp)) { Text("时间安排", fontSize = 18.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(4.dp)); Text("${sch.teacher} · ${sch.credit}学分 · ${sch.type} · ${sch.exam}", fontSize = 13.sp, color = AppC.textMuted); Text(sch.unit, fontSize = 12.sp, color = AppC.textMuted) } }
+                LazyColumn(contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 80.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(sch.slots.size) { i -> val ts = sch.slots[i]; Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier
+                    .fillMaxWidth()
+                    .dragToReorder(
+                        slotDragState,
+                        i,
+                        sch.slots.size,
+                        extraPx = slotPitch
+                    ) { from, d -> moveSlotAt(from, d) }) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${dayNames[ts.day]}  ${ts.slot}", fontWeight = FontWeight.Bold, fontSize = 14.sp); Text(ts.room, fontSize = 12.sp, color = AppC.textMuted); Text("第${ts.weekStart}~${ts.weekEnd}周", fontSize = 11.sp, color = AppC.textMuted) }; IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); showEditSlot = i }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }; IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); val u = courses.toMutableList(); sch.slots.removeAt(i); replaceCourse(u, courseName, sch.toFlatCourses()); saveCoursesToPrefs(prefs, u); onSlotAdded() }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) } } } } }
             } ?: Text("未找到课程", modifier = Modifier.padding(16.dp))
         }
     }
@@ -1483,12 +1839,16 @@ fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.c
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text("星期", fontSize = 12.sp, color = AppC.textMuted)
-                    FlowRow(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (d in 1..7) { val s = editDay == d; Surface(onClick = { editDay = d }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(dayNames[d], modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } }
+                    FlowRow(Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (d in 1..7) { val s = editDay == d; Surface(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); editDay = d }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(dayNames[d], modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } }
                     }
                     Text("时间段（可多选，且要连续）", fontSize = 12.sp, color = AppC.textMuted)
-                    FlowRow(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (idx in slots.indices) { val s = editSelIndices.value.contains(idx); Surface(onClick = { val n = editSelIndices.value.toMutableSet(); if (s) n.remove(idx) else n.add(idx); editSelIndices.value = n; editSlotError = false }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(slots[idx].name, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } }
+                    FlowRow(Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (idx in slots.indices) { val s = editSelIndices.value.contains(idx); Surface(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); val n = editSelIndices.value.toMutableSet(); if (s) n.remove(idx) else n.add(idx); editSelIndices.value = n; editSlotError = false }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(slots[idx].name, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } }
                     }
                     if (editSlotError) Text("*时间段必须连续", color = AppC.danger, fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
                     FormField("教室", editRoom) { editRoom = it }
@@ -1496,6 +1856,7 @@ fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.c
                 }
             },
             confirmButton = { TextButton(onClick = {
+                tickHaptic(hapticCtx, HapticKind.TAP)
                 val sorted = editSelIndices.value.sorted()
                 if (sorted.size >= 2 && sorted.last() - sorted.first() + 1 != sorted.size) { editSlotError = true; return@TextButton }
                 val newSlot = sorted.joinToString("、") { slots[it].name }
@@ -1507,7 +1868,7 @@ fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.c
                 showEditSlot = -1
                 onSlotAdded()
             }) { Text("确定") } },
-            dismissButton = { TextButton(onClick = { showEditSlot = -1 }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); showEditSlot = -1 }) { Text("取消") } }
         )
     }
 }
@@ -1516,6 +1877,7 @@ fun CourseDetailPage(courses: List<Course>, courseName: String, prefs: android.c
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AddSlotDialog(onDismiss: () -> Unit, onConfirm: (Int, String, Int, Int, String) -> Unit, slots: MutableList<SlotItem>) {
+    val hapticCtx = LocalContext.current
     var day by remember { mutableIntStateOf(1) }
     var selectedSlots by remember { mutableStateOf(mutableSetOf(1)) }
     var slotVer by remember { mutableIntStateOf(0) }
@@ -1524,35 +1886,43 @@ fun AddSlotDialog(onDismiss: () -> Unit, onConfirm: (Int, String, Int, Int, Stri
     AlertDialog(onDismissRequest = onDismiss, containerColor = AppC.card, shape = RoundedCornerShape(16.dp), title = { Text("添加时间段") },
         text = { Column(Modifier.verticalScroll(rememberScrollState())) {
             Text("星期", fontSize = 12.sp, color = AppC.textMuted)
-            FlowRow(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { for (d in 1..7) { val s = day == d; Surface(onClick = { day = d }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(dayNames[d], modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } } }
+            FlowRow(Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { for (d in 1..7) { val s = day == d; Surface(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); day = d }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(dayNames[d], modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } } }
             Text("时间段（可多选，且要连续）", fontSize = 12.sp, color = AppC.textMuted)
-            FlowRow(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { for (idx in slots.indices) { val s = selectedSlots.contains(idx); Surface(onClick = { val n = selectedSlots.toMutableSet(); if (s) n.remove(idx) else n.add(idx); selectedSlots = n; slotVer++; slotError = false }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(slots[idx].name, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } } }
+            FlowRow(Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { for (idx in slots.indices) { val s = selectedSlots.contains(idx); Surface(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); val n = selectedSlots.toMutableSet(); if (s) n.remove(idx) else n.add(idx); selectedSlots = n; slotVer++; slotError = false }, shape = RoundedCornerShape(8.dp), color = if (s) AppC.accent else AppC.chipGray) { Text(slots[idx].name, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 12.sp, color = if (s) readableOn(AppC.accent) else AppC.textSecondary) } } }
             if (slotError) Text("*时间段必须连续", color = AppC.danger, fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
             FormField("教室", room) { room = it }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Box(Modifier.weight(1f)) { FormField("起始周", ws) { ws = it } }; Box(Modifier.weight(1f)) { FormField("结束周", we) { we = it } } }
         } },
         confirmButton = { TextButton(onClick = {
+            tickHaptic(hapticCtx, HapticKind.TAP)
             val sorted = selectedSlots.sorted()
             if (sorted.size >= 2 && sorted.last() - sorted.first() + 1 != sorted.size) { slotError = true; return@TextButton }
             val slotStr = sorted.joinToString("、") { slots[it].name }
             onConfirm(day, slotStr, ws.toIntOrNull() ?: 1, we.toIntOrNull() ?: 18, room.trim())
         }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+        dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消") } })
 }
 
 // ====== 学期设置页 ======
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneralInfoPage(config: ScheduleConfig, prefs: android.content.SharedPreferences, onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit, slots: MutableList<SlotItem>) {
+    val hapticCtx = LocalContext.current
     var tw by remember { mutableStateOf(config.totalWeeks.toString()) }; var sd by remember { mutableStateOf(config.startDate) }; var sch by remember { mutableStateOf(config.school) }; var maj by remember { mutableStateOf(config.major) }
-    Scaffold(topBar = { TopAppBar(title = { Text("学期设置") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
-        Column(Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Scaffold(topBar = { TopAppBar(title = { Text("学期设置") }, navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
+        Column(Modifier
+            .padding(padding)
+            .padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             FormField("本学期周数", tw) { tw = it }
             DateField("学期开始日期", sd, "点击选择日期") { sd = it }
             FormField("学校", sch) { sch = it }
             FormField("专业", maj) { maj = it }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = { saveConfigToPrefs(prefs, ScheduleConfig((tw.toIntOrNull() ?: 18).coerceIn(1, TOTAL_WEEKS_MAX), sd, sch, maj)); onBack() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill))) { Text("保存设置") }
+            Button(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); saveConfigToPrefs(prefs, ScheduleConfig((tw.toIntOrNull() ?: 18).coerceIn(1, TOTAL_WEEKS_MAX), sd, sch, maj)); onBack() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill))) { Text("保存设置") }
         }
     }
 }
@@ -1560,17 +1930,21 @@ fun GeneralInfoPage(config: ScheduleConfig, prefs: android.content.SharedPrefere
 // ====== 设置页（导入、导出、清空） ======
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsPage(onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit, prefs: android.content.SharedPreferences, dataPrefs: android.content.SharedPreferences, onAbout: () -> Unit, onDeleteAll: () -> Unit, onDeveloper: () -> Unit = {}) {
+fun SettingsPage(onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit, prefs: android.content.SharedPreferences, dataPrefs: android.content.SharedPreferences, onAbout: () -> Unit, onDeleteAll: () -> Unit, onDeveloper: () -> Unit = {}, onHaptic: () -> Unit = {}) {
     var showClearDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    Scaffold(topBar = { TopAppBar(title = { Text("设置") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            // 解释性副文本统一收进「使用手册」，这里一律只留标题
+    Scaffold(topBar = { TopAppBar(title = { Text("设置") }, navigationIcon = { IconButton(onClick = { tickHaptic(context, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
+        Column(Modifier
+            .padding(padding)
+            .fillMaxSize()) {
+            // 解释性副文本统一收进「帮助」，这里一律只留标题
+            // 触觉反馈放最上面：它是"手感"类设置，比数据操作更常被翻出来调
+            DrawerMenuItem(icon = Icons.Default.Vibration, label = "触觉反馈", onClick = onHaptic)
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             DrawerMenuItem(icon = Icons.Default.Upload, label = "导出数据", onClick = onExport)
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             DrawerMenuItem(icon = Icons.Default.Download, label = "导入数据", onClick = { onImport() })
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            // 「上课提醒」「外观设置」都不在这里：入口统一放侧边菜单，同一个功能不留两个门
-            // 深色模式在「外观设置」页里（和主题色同属外观）
             DrawerMenuItem(icon = Icons.Default.Delete, label = "删除所有数据", onClick = { showClearDialog = true })
             // 开发者模式入口：默认隐藏，关于页连点版本号 8 次才出现（页面内总开关可关）
             if (AppC.devModeOn) {
@@ -1578,7 +1952,6 @@ fun SettingsPage(onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
                 DrawerMenuItem(icon = Icons.Default.Build, label = "开发者模式", onClick = onDeveloper)
             }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            // 「使用手册」也不放这里：入口只留侧边菜单那一个（同一个功能不留两个门）
             DrawerMenuItem(icon = Icons.Default.Info, label = "关于", onClick = onAbout)
         }
     }
@@ -1603,8 +1976,105 @@ fun SettingsPage(onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
                 onDeleteAll()
                 showClearDialog = false
             }) { Text("确定删除", color = AppC.danger) } },
-            dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { tickHaptic(context, HapticKind.TAP); showClearDialog = false }) { Text("取消") } }
         )
+    }
+}
+
+// ====== 触觉反馈设置页 ======
+/**
+ * 触觉反馈：总开关 + 按场景分类的开关。
+ *
+ * 每改一个开关都**当场试震一下**（打开时响对应分类的震动）—— 用户能立刻确认
+ * "这个分类对应的是哪种操作"，不用退出去一个个试。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HapticPage(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    // onChange 里读的是这个普通的 Context（不是 Composable 上下文），所以提前取好
+    var master by remember { mutableStateOf(HapticStore.masterOn(ctx)) }
+    var kindStates by remember { mutableStateOf(HapticKind.all().associateWith { HapticStore.kindOn(ctx, it) }) }
+    // 马达类型只探测一次，用来解释"为什么默认是开/关"
+    val richHaptics = remember { hasRichHaptics(ctx) }
+
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("触觉反馈") }, navigationIcon = {
+            IconButton(onClick = { tickHaptic(ctx); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+        }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
+    }) { padding ->
+        Column(
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // ---- 总开关 ----
+            Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("触觉反馈", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(if (master) "已开启" else "已关闭，任何操作都不震动", fontSize = 11.sp, color = AppC.textMuted)
+                    }
+                    Switch(checked = master, onCheckedChange = {
+                        master = it
+                        HapticStore.setMaster(ctx, it)
+                        // 开、关都给一下反馈：关掉时若还先查开关，这一下会被自己拦掉，点了"关"反而没回应
+                        tickHaptic(ctx, HapticKind.TOGGLE, force = true)
+                    }, colors = SwitchDefaults.colors(checkedTrackColor = AppC.accentFill, checkedThumbColor = readableOn(AppC.accentFill)))
+                }
+            }
+
+            // ---- 马达类型说明：告诉用户默认值是怎么来的 ----
+            Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (richHaptics) Icons.Default.Vibration else Icons.Default.PhoneAndroid, null,
+                        tint = AppC.textSecondary, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(if (richHaptics) "检测到线性马达" else "检测到转子马达", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        Text(
+                            if (richHaptics) "触感干脆，已默认开启。"
+                            else "震动偏“嗡”，已默认关闭——想试试可以手动打开。",
+                            fontSize = 11.sp, color = AppC.textMuted
+                        )
+                    }
+                }
+            }
+
+            // ---- 分场景开关 ----
+            Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text("按场景开关", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text("关掉某个场景后，只有那类操作不再震动。", fontSize = 11.sp, color = AppC.textMuted)
+                    Spacer(Modifier.height(4.dp))
+                    kindStates.forEach { (kind, on) ->
+                        HorizontalDivider(color = AppC.divider)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .alpha(if (master) 1f else 0.45f)
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(kind.label, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                                Text(kind.desc, fontSize = 11.sp, color = AppC.textMuted)
+                            }
+                            Switch(checked = on, enabled = master, onCheckedChange = {
+                                kindStates = kindStates + (kind to it)
+                                HapticStore.setKind(ctx, kind, it)
+                                // 开、关都震（force 跳过开关判断：关掉这一类时也得有回应）
+                                tickHaptic(ctx, kind, force = true)
+                            }, colors = SwitchDefaults.colors(checkedTrackColor = AppC.accentFill, checkedThumbColor = readableOn(AppC.accentFill)))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1612,7 +2082,9 @@ fun SettingsPage(onBack: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
 @Composable
 fun EmptyHint(title: String, desc: String) {
     Column(
-        Modifier.fillMaxWidth().padding(top = 96.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 96.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(Icons.Default.Inbox, null, tint = AppC.emptyIcon, modifier = Modifier.size(56.dp))
@@ -1626,6 +2098,7 @@ fun EmptyHint(title: String, desc: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimeTableSettingsPage(prefs: android.content.SharedPreferences, onBack: () -> Unit, onRefresh: () -> Unit, slots: MutableList<SlotItem>) {
+    val hapticCtx = LocalContext.current
     var showAddDialog by remember { mutableStateOf(false) }
     var editingSlot by remember { mutableStateOf<SlotItem?>(null) }
     // Multi-select state
@@ -1640,25 +2113,25 @@ fun TimeTableSettingsPage(prefs: android.content.SharedPreferences, onBack: () -
             if (multiSelectMode) {
                 TopAppBar(
                     title = { Text("已选择 ${selectedIndices.size} 项") },
-                    navigationIcon = { IconButton(onClick = { multiSelectMode = false; selectedIndices = emptySet() }) { Icon(Icons.Default.Close, "退出多选") } },
+                    navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); multiSelectMode = false; selectedIndices = emptySet() }) { Icon(Icons.Default.Close, "退出多选") } },
                     actions = {
-                        IconButton(onClick = { selectedIndices = if (allSelected) emptySet() else slots.indices.toSet() }) { Icon(if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank, "全选") }
-                        IconButton(onClick = { pendingDeleteIndices = selectedIndices.toSet() }) { Icon(Icons.Default.Delete, "删除选中", tint = AppC.danger) }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); selectedIndices = if (allSelected) emptySet() else slots.indices.toSet() }) { Icon(if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank, "全选") }
+                        IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteIndices = selectedIndices.toSet() }) { Icon(Icons.Default.Delete, "删除选中", tint = AppC.danger) }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText, actionIconContentColor = AppC.headerText)
                 )
             } else {
-                TopAppBar(title = { Text("时间表设置（${slots.size}节）") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
+                TopAppBar(title = { Text("时间表设置（${slots.size}节）") }, navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
             }
         },
         floatingActionButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
                 if (!multiSelectMode) {
-                    FloatingActionButton(onClick = { multiSelectMode = true }, containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill)) {
+                    FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); multiSelectMode = true }, containerColor = AppC.accentFill, contentColor = readableOn(AppC.accentFill)) {
                         Icon(Icons.Default.Checklist, "多选", tint = readableOn(AppC.accentFill))
                     }
                 }
-                FloatingActionButton(onClick = { showAddDialog = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加节次", tint = Color.White) }
+                FloatingActionButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); showAddDialog = true }, containerColor = AppC.success) { Icon(Icons.Default.Add, "添加节次", tint = Color.White) }
             }
         }
     ) { padding ->
@@ -1669,11 +2142,18 @@ fun TimeTableSettingsPage(prefs: android.content.SharedPreferences, onBack: () -
             items(slots.size) { i ->
                 val si = slots[i]
                 val checked = selectedIndices.contains(i)
-                Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    if (multiSelectMode) {
-                        selectedIndices = if (checked) selectedIndices - i else selectedIndices + i
-                    }
-                }) {
+                Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (multiSelectMode) tickHaptic(hapticCtx, HapticKind.SELECT)
+                        if (multiSelectMode) {
+                            selectedIndices =
+                                if (checked) selectedIndices - i else selectedIndices + i
+                        }
+                    }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (multiSelectMode) {
                             Icon(if (checked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank, null,
@@ -1685,8 +2165,8 @@ fun TimeTableSettingsPage(prefs: android.content.SharedPreferences, onBack: () -
                             Text("${si.startTime} - ${si.endTime}", fontSize = 13.sp, color = AppC.accent)
                         }
                         if (!multiSelectMode) {
-                            IconButton(onClick = { editingSlot = si }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
-                            IconButton(onClick = { pendingDeleteIndices = setOf(i) }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
+                            IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); editingSlot = si }) { Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp)) }
+                            IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteIndices = setOf(i) }) { Icon(Icons.Default.Delete, null, tint = AppC.danger, modifier = Modifier.size(20.dp)) }
                         }
                     }
                 }
@@ -1702,41 +2182,47 @@ fun TimeTableSettingsPage(prefs: android.content.SharedPreferences, onBack: () -
             title = { Text("确认删除") },
             text = { Text("确定要删除这 ${pendingDeleteIndices.size} 个节次吗？此操作不可撤销。") },
             confirmButton = { TextButton(onClick = {
+                tickHaptic(hapticCtx, HapticKind.TAP)
                 val toRemove = pendingDeleteIndices.sortedDescending()
                 for (idx in toRemove) slots.removeAt(idx)
                 saveSlots(prefs, slots)
                 pendingDeleteIndices = emptySet()
                 multiSelectMode = false; selectedIndices = emptySet(); onRefresh()
             }) { Text("删除", color = AppC.danger) } },
-            dismissButton = { TextButton(onClick = { pendingDeleteIndices = emptySet() }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); pendingDeleteIndices = emptySet() }) { Text("取消") } }
         )
     }
 
-    if (showAddDialog) SlotEditDialog(name = "", start = "", end = "", onDismiss = { showAddDialog = false }, onConfirm = { n, s, e -> slots.add(SlotItem(name = n, startTime = s, endTime = e)); slots.sortBy { it.startTime }; saveSlots(prefs, slots); showAddDialog = false; onRefresh() })
+    if (showAddDialog) SlotEditDialog(name = "", start = "", end = "", onDismiss = { showAddDialog = false }, onConfirm = { n, s, e -> tickHaptic(hapticCtx, HapticKind.TAP); slots.add(SlotItem(name = n, startTime = s, endTime = e)); slots.sortBy { it.startTime }; saveSlots(prefs, slots); showAddDialog = false; onRefresh() })
 
     editingSlot?.let { si ->
-        SlotEditDialog(name = si.name, start = si.startTime, end = si.endTime, onDismiss = { editingSlot = null }, onConfirm = { n, s, e -> si.name = n; si.startTime = s; si.endTime = e; slots.sortBy { it.startTime }; saveSlots(prefs, slots); editingSlot = null; onRefresh() })
+        SlotEditDialog(name = si.name, start = si.startTime, end = si.endTime, onDismiss = { editingSlot = null }, onConfirm = { n, s, e -> tickHaptic(hapticCtx, HapticKind.TAP); si.name = n; si.startTime = s; si.endTime = e; slots.sortBy { it.startTime }; saveSlots(prefs, slots); editingSlot = null; onRefresh() })
     }
 }
 
 @Composable
 fun SlotEditDialog(name: String, start: String, end: String, onDismiss: () -> Unit, onConfirm: (String, String, String) -> Unit) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
     var n by remember { mutableStateOf(name) }; var s by remember { mutableStateOf(start) }; var e by remember { mutableStateOf(end) }
     AlertDialog(onDismissRequest = onDismiss, containerColor = AppC.card, shape = RoundedCornerShape(16.dp), title = { Text(if (name.isEmpty()) "添加节次" else "编辑节次") },
         text = { Column { FormField("节次名称", n) { n = it }; TimeField("开始时间", s, "点击选择时间") { s = it }; TimeField("结束时间", e, "点击选择时间") { e = it } } },
         confirmButton = { TextButton(onClick = {
+            tickHaptic(hapticCtx, HapticKind.TAP)
             // 中文输入法可能打出全角冒号/全角数字，入库前统一归一化
             val ns = normalizeTimeText(s); val ne = normalizeTimeText(e)
             if (n.isNotBlank() && ns.isNotBlank() && ne.isNotBlank()) onConfirm(n.trim(), ns, ne)
         }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+        dismissButton = { TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() }) { Text("取消") } })
 }
 
 // ====== 上课提醒页 ======
 /** 保活弹窗里的一行：标题+说明+（可选状态图标）+去设置按钮。ok=null 表示无法自动检测 */
 @Composable
 fun KeepAliveRow(title: String, desc: String, ok: Boolean?, actionText: String, onAction: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
+    Row(Modifier
+        .fillMaxWidth()
+        .padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontWeight = FontWeight.Medium, fontSize = 14.sp)
@@ -1748,7 +2234,7 @@ fun KeepAliveRow(title: String, desc: String, ok: Boolean?, actionText: String, 
             }
             Text(desc, fontSize = 11.sp, color = AppC.textMuted, lineHeight = 15.sp)
         }
-        TextButton(onClick = onAction) { Text(actionText, fontSize = 13.sp, color = AppC.accent) }
+        TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onAction() }) { Text(actionText, fontSize = 13.sp, color = AppC.accent) }
     }
 }
 
@@ -1797,15 +2283,16 @@ fun InlineKeepAliveCard(
             HorizontalDivider(color = AppC.divider)
             KeepAliveRow("精确闹钟", if (exactAllowed) "已允许，闹钟会准时触发" else "未允许：到点可能不准或不触发",
                 ok = exactAllowed, actionText = "去开启") {
+                tickHaptic(context, HapticKind.TAP)
                 ReminderNotifier.openAlarmSettings(context)
                 onPermChanged()
             }
             HorizontalDivider(color = AppC.divider)
             KeepAliveRow("后台自启动", "允许后开机与划掉后台都能恢复提醒",
-                ok = null, actionText = "去设置") { ReminderNotifier.openAutostartSettings(context) }
+                ok = null, actionText = "去设置") { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openAutostartSettings(context) }
             HorizontalDivider(color = AppC.divider)
             KeepAliveRow("电池优化", "省电策略设为「不限制」，后台闹钟不被杀",
-                ok = null, actionText = "去设置") { ReminderNotifier.openBatterySettings(context) }
+                ok = null, actionText = "去设置") { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openBatterySettings(context) }
             HorizontalDivider(color = AppC.divider)
             KeepAliveRow(
                 "最近任务加锁",
@@ -1898,14 +2385,18 @@ fun ReminderPage(
         TopAppBar(
             title = { Text("上课提醒") },
             navigationIcon = {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+                IconButton(onClick = { tickHaptic(context, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)
         )
     }) { padding ->
         Column(
-            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())
-                .background(AppC.bg).padding(16.dp),
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .background(AppC.bg)
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // ---- 通知方式：三选一（互斥，从根上避免两套通知同时说话）----
@@ -1920,7 +2411,7 @@ fun ReminderPage(
                         modeNames.forEachIndexed { i, name ->
                             val sel = cfg.mode == i
                             Surface(
-                                onClick = { pickMode(i) },
+                                onClick = { tickHaptic(context, HapticKind.SELECT); pickMode(i) },
                                 shape = RoundedCornerShape(10.dp),
                                 color = if (sel) AppC.accentFill else AppC.chipGray,
                                 border = BorderStroke(1.5.dp, if (sel) AppC.accent else Color.Transparent),
@@ -1928,14 +2419,16 @@ fun ReminderPage(
                             ) {
                                 Text(
                                     name,
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
                                     fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 1,
                                     color = if (sel) readableOn(AppC.accentFill) else AppC.textSecondary,
                                 )
                             }
                         }
                     }
-                    // 三种方式各自说明统一收进「使用手册」，这里只留标题与选择器
+                    // 三种方式各自说明统一收进「帮助」，这里只留标题与选择器
                 }
             }
 
@@ -1954,6 +2447,7 @@ fun ReminderPage(
                         Text("不开启的话到点不会有提醒弹出。", fontSize = 12.sp, color = AppC.warnText)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = {
+                            tickHaptic(context, HapticKind.TAP)
                             ReminderNotifier.openNotificationSettings(context); permTick++
                         }, colors = ButtonDefaults.buttonColors(containerColor = AppC.amber)) { Text("去开启") }
                     }
@@ -1971,6 +2465,7 @@ fun ReminderPage(
                     lockAdvised = lockAdvised,
                     notificationsEnabled = notificationsEnabled,
                     onLockAdvised = {
+                        tickHaptic(context, HapticKind.TAP)
                         ReminderNotifier.setLockAdvised(context, true)
                         lockAdvised = true
                     },
@@ -1998,10 +2493,12 @@ fun ReminderPage(
                                 checked = selected.contains(m),
                                 custom = !presets.contains(m),
                                 onToggle = {
+                                    tickHaptic(context, HapticKind.SELECT)
                                     val next = if (selected.contains(m)) selected - m else selected + m
                                     persist(cfg.copy(advanceMinutes = next.sorted()))
                                 },
                                 onDelete = {
+                                    tickHaptic(context, HapticKind.TAP)
                                     persist(cfg.copy(advanceMinutes = (selected - m).sorted()))
                                 }
                             )
@@ -2012,7 +2509,7 @@ fun ReminderPage(
                         }
                         Spacer(Modifier.height(8.dp))
                         Surface(
-                            onClick = { wheelFor = MODE_NORMAL; wheelOpen = true },
+                            onClick = { tickHaptic(context, HapticKind.TAP); wheelFor = MODE_NORMAL; wheelOpen = true },
                             shape = RoundedCornerShape(10.dp),
                             color = AppC.chipGray,
                             modifier = Modifier.fillMaxWidth()
@@ -2032,7 +2529,7 @@ fun ReminderPage(
                             Text("下课时也提醒", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
                         Switch(checked = cfg.endReminder, onCheckedChange = {
-                            persist(cfg.copy(endReminder = it))
+                            tickHaptic(context, HapticKind.TOGGLE); persist(cfg.copy(endReminder = it))
                         }, colors = SwitchDefaults.colors(checkedTrackColor = AppC.accentFill, checkedThumbColor = readableOn(AppC.accentFill)))
                     }
                 }
@@ -2053,8 +2550,10 @@ fun ReminderPage(
                         val shown = (presetList + if (curFocus in presetList) emptyList() else listOf(curFocus)).sorted()
                         shown.forEach { m ->
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                    .clickable { persist(cfg.copy(focusAdvanceMinutes = m)) }
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { tickHaptic(context, HapticKind.SELECT); persist(cfg.copy(focusAdvanceMinutes = m)) }
                                     .padding(vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -2069,7 +2568,7 @@ fun ReminderPage(
                         }
                         Spacer(Modifier.height(8.dp))
                         Surface(
-                            onClick = { wheelFor = MODE_FOCUS; wheelOpen = true },
+                            onClick = { tickHaptic(context, HapticKind.TAP); wheelFor = MODE_FOCUS; wheelOpen = true },
                             shape = RoundedCornerShape(10.dp),
                             color = AppC.chipGray,
                             modifier = Modifier.fillMaxWidth()
@@ -2089,7 +2588,7 @@ fun ReminderPage(
                             Text("下课时也提醒", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
                         Switch(checked = cfg.endReminder, onCheckedChange = {
-                            persist(cfg.copy(endReminder = it))
+                            tickHaptic(context, HapticKind.TOGGLE); persist(cfg.copy(endReminder = it))
                         }, colors = SwitchDefaults.colors(checkedTrackColor = AppC.accentFill, checkedThumbColor = readableOn(AppC.accentFill)))
                     }
                 }
@@ -2106,7 +2605,9 @@ fun ReminderPage(
                             courses.none { it.room != "-" } -> Text("还没有安排教室的课程，先去「课程管理」添加吧", fontSize = 13.sp, color = AppC.orange)
                             upcoming.isEmpty() -> Text("近期没有课程（学期起止日期或周次范围可能已过）", fontSize = 13.sp, color = AppC.textMuted)
                             else -> upcoming.take(8).forEach { e ->
-                                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Surface(shape = RoundedCornerShape(6.dp), color = AppC.iconCircleBg) {
                                         Text("${e.dayLabel()} ${e.startText()}", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 11.sp, color = AppC.titleDark, fontWeight = FontWeight.Medium)
                                     }
@@ -2149,7 +2650,7 @@ fun ReminderPage(
                                     )
                                 }
                                 if (!headsUpOk) {
-                                    TextButton(onClick = { ReminderNotifier.openChannelSettings(context); permTick++ }) {
+                                    TextButton(onClick = { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openChannelSettings(context); permTick++ }) {
                                         Text("去开启", fontSize = 13.sp, color = AppC.accent)
                                     }
                                 }
@@ -2179,6 +2680,7 @@ fun ReminderPage(
                                     )
                                     Spacer(Modifier.height(8.dp))
                                     Button(onClick = {
+                                        tickHaptic(context, HapticKind.TAP)
                                         ReminderNotifier.setLockAdvised(context, true)
                                         lockAdvised = true
                                     }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = AppC.orange)) {
@@ -2194,8 +2696,10 @@ fun ReminderPage(
                         if (showEntry) {
                             val exactOk = remember(permTick) { ReminderNotifier.exactAlarmsAllowed(context) }
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                    .clickable { keepAliveOpen = true }
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { tickHaptic(context, HapticKind.TAP); keepAliveOpen = true }
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -2227,18 +2731,18 @@ fun ReminderPage(
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     // 和引导页同一套顺序：系统通知打头，后面才是四项保活
-                    NotificationPermissionRow(enabled = notificationsEnabled, onAction = { askNotification() })
+                    NotificationPermissionRow(enabled = notificationsEnabled, onAction = { tickHaptic(context, HapticKind.TAP); askNotification() })
                     HorizontalDivider(color = AppC.divider)
                     KeepAliveRow("精确闹钟", if (exactAllowed) "已允许，闹钟会准时触发" else "未允许：到点可能不准或不触发",
                         ok = exactAllowed, actionText = "去开启") {
-                        ReminderNotifier.openAlarmSettings(context); permTick++
+                        tickHaptic(context, HapticKind.TAP); ReminderNotifier.openAlarmSettings(context); permTick++
                     }
                     HorizontalDivider(color = AppC.divider)
                     KeepAliveRow("后台自启动", "允许后开机与划掉后台都能恢复提醒",
-                        ok = null, actionText = "去设置") { ReminderNotifier.openAutostartSettings(context) }
+                        ok = null, actionText = "去设置") { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openAutostartSettings(context) }
                     HorizontalDivider(color = AppC.divider)
                     KeepAliveRow("电池优化", "省电策略设为「不限制」，后台闹钟不被杀",
-                        ok = null, actionText = "去设置") { ReminderNotifier.openBatterySettings(context) }
+                        ok = null, actionText = "去设置") { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openBatterySettings(context) }
                     HorizontalDivider(color = AppC.divider)
                     // 最近任务加锁：系统里没有对应的开关页，只能给步骤 + 让用户自己确认
                     KeepAliveRow(
@@ -2246,18 +2750,20 @@ fun ReminderPage(
                         "打开最近任务 → 长按本应用卡片（或点卡片上的锁定图标）→ 选「锁定」，卡片出现小锁头即成功；手机没有锁定功能可忽略",
                         ok = lockAdvised, actionText = if (lockAdvised) "已加锁" else "去加锁",
                     ) {
+                        tickHaptic(context, HapticKind.TAP)
                         ReminderNotifier.setLockAdvised(context, true)
                         lockAdvised = true
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { keepAliveOpen = false }) { Text("完成", color = AppC.accent) } },
+            confirmButton = { TextButton(onClick = { tickHaptic(context, HapticKind.TAP); keepAliveOpen = false }) { Text("完成", color = AppC.accent) } },
         )
     }
     if (wheelOpen) {
         AdvanceWheelDialog(
             onDismiss = { wheelOpen = false },
             onConfirm = { minutes ->
+                tickHaptic(context, HapticKind.TAP)
                 wheelOpen = false
                 if (minutes in 1..ReminderNotifier.ADVANCE_MAX) {
                     if (wheelFor == MODE_FOCUS) {
@@ -2278,13 +2784,16 @@ val ADVANCE_PRESETS = listOf(0, 5, 10, 15, 20, 30)
 // ====== 提醒时间列表行 ======
 @Composable
 fun AdvanceRow(label: String, checked: Boolean, custom: Boolean, onToggle: () -> Unit, onDelete: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
+    Row(Modifier
+        .fillMaxWidth()
+        .padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, fontSize = 15.sp, color = AppC.textPrimary, modifier = Modifier.weight(1f))
         if (custom) {
-            TextButton(onClick = onDelete) { Text("删除", fontSize = 12.sp, color = AppC.textDisabled) }
+            TextButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDelete() }) { Text("删除", fontSize = 12.sp, color = AppC.textDisabled) }
         }
         Surface(
-            onClick = onToggle,
+            onClick = { tickHaptic(hapticCtx, HapticKind.SELECT); onToggle() },
             shape = RoundedCornerShape(percent = 50),
             color = if (checked) AppC.accent else AppC.switchOff,
             modifier = Modifier.size(26.dp)
@@ -2297,6 +2806,7 @@ fun AdvanceRow(label: String, checked: Boolean, custom: Boolean, onToggle: () ->
 // ====== 自定义提前量滚轮选择弹窗 ======
 @Composable
 fun AdvanceWheelDialog(onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
     // 单位只有分钟/小时，最大提前量 = 24 小时
     val units = listOf("分钟" to 1, "小时" to 60)
     var unitIndex by remember { mutableIntStateOf(0) }
@@ -2342,7 +2852,7 @@ fun AdvanceWheelDialog(onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(minutes) },
+                onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onConfirm(minutes) },
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .clip(RoundedCornerShape(20.dp))
@@ -2352,7 +2862,7 @@ fun AdvanceWheelDialog(onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
         },
         dismissButton = {
             TextButton(
-                onClick = onDismiss,
+                onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onDismiss() },
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
                     .background(AppC.wheelBg)
@@ -2367,6 +2877,7 @@ fun AdvanceWheelDialog(onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
 // 单位列只有两项，循环滚动体验很差，保持普通列表。
 @Composable
 fun WheelColumn(items: List<String>, selectedIndex: Int, onSelected: (Int) -> Unit, modifier: Modifier = Modifier, loop: Boolean = false) {
+    val hapticCtx = LocalContext.current   // snapshotFlow 的 collect 不是 Composable，Context 得先取
     val itemHeight = 44.dp
     val n = items.size.coerceAtLeast(1)
     // 循环模式从一个大的对齐起点开始，两边都有足够的滚动余量
@@ -2392,7 +2903,10 @@ fun WheelColumn(items: List<String>, selectedIndex: Int, onSelected: (Int) -> Un
             val step = if (offset > itemHeightPx / 2) 1 else 0
             val centered = if (loop) ((idx + step) % n + n) % n else idx + step
             if (scrolling) {
-                if (centered in items.indices && centered != selectedIndex) onSelected(centered)
+                if (centered in items.indices && centered != selectedIndex) {
+                    tickHaptic(hapticCtx, HapticKind.SELECT)   // 每滚过一档"哒"一下
+                    onSelected(centered)
+                }
             } else if (centered in items.indices && centered != selectedIndex) {
                 // 滚动停止但列表停在非选中项（拖一半弹回、外部夹值等）→ 把列表对齐回选中项，
                 // 否则高亮/标题和滚轮会永久脱节
@@ -2412,7 +2926,9 @@ fun WheelColumn(items: List<String>, selectedIndex: Int, onSelected: (Int) -> Un
             val real = if (loop) i % n else i
             val active = real == selectedIndex
             Box(
-                Modifier.fillMaxWidth().height(itemHeight),
+                Modifier
+                    .fillMaxWidth()
+                    .height(itemHeight),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -2446,12 +2962,16 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
     val exactOk = remember(tick) { ReminderNotifier.exactAlarmsAllowed(context) }
     Scaffold(topBar = {
         TopAppBar(title = { Text("开发者模式") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = { tickHaptic(context, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
         }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText))
     }) { padding ->
         Column(
-            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())
-                .background(AppC.bg).padding(16.dp),
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .background(AppC.bg)
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 总开关：关掉后设置页不再显示"开发者模式"入口，但当前页面保持停留（重新开启需再到关于页连点版本 8 次）
@@ -2461,6 +2981,7 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                     Switch(
                         checked = AppC.devModeOn,
                         onCheckedChange = { on ->
+                            tickHaptic(context, HapticKind.TOGGLE)
                             // 关掉时页内所有子设置恢复默认（含测试课表）；数据源可能因此从
                             // 测试文件切回真实文件，顺手原地重载一次，页面本身保持停留
                             DeveloperSettings.setEnabled(context, on)
@@ -2490,6 +3011,7 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                         Switch(
                             checked = testOn,
                             onCheckedChange = { on ->
+                                tickHaptic(context, HapticKind.TOGGLE)
                                 if (on) TestSchedule.enable(context) else TestSchedule.disable(context)
                                 // 原地重读课表数据（不 recreate，否则会被弹回主页）+ 重新排期
                                 onDataReload()
@@ -2508,6 +3030,7 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                         Spacer(Modifier.height(10.dp))
                         OutlinedButton(
                             onClick = {
+                                tickHaptic(context, HapticKind.TAP)
                                 TestSchedule.enable(context)   // 重新按"今天"生成一份
                                 onDataReload()                 // 同样原地重载，不离开本页
                                 tick++
@@ -2525,6 +3048,7 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                     Text("测试通知", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = {
+                        tickHaptic(context, HapticKind.TAP)
                         ReminderNotifier.notifyTest(context)
                         android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
                     }, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, AppC.accent)) { Text("发送测试通知", fontSize = 13.sp) }
@@ -2540,6 +3064,7 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                     Text("权限查询：$permDebug", fontSize = 12.sp, color = AppC.textSecondary, lineHeight = 16.sp)
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = {
+                        tickHaptic(context, HapticKind.TAP)
                         FocusNotifier.notifyFocusTest(context)
                         android.widget.Toast.makeText(context, "已发送（去通知栏/锁屏看一眼）", android.widget.Toast.LENGTH_SHORT).show()
                         tick++
@@ -2555,12 +3080,13 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
                     Text(diag, fontSize = 12.sp, color = AppC.textSecondary, lineHeight = 18.sp)
                     if (!exactOk) {
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { ReminderNotifier.openAlarmSettings(context) }, modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { tickHaptic(context, HapticKind.TAP); ReminderNotifier.openAlarmSettings(context) }, modifier = Modifier.fillMaxWidth()) {
                             Text("开启精确闹钟权限", fontSize = 13.sp)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = {
+                        tickHaptic(context, HapticKind.TAP)
                         ReminderNotifier.schedule(context); tick++
                         android.widget.Toast.makeText(context, "已重新排期", android.widget.Toast.LENGTH_SHORT).show()
                     }, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, AppC.accent)) { Text("重新排期闹钟", fontSize = 13.sp) }
@@ -2581,13 +3107,18 @@ fun DeveloperPage(onBack: () -> Unit, onDataReload: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AppearancePage(prefs: android.content.SharedPreferences, onBack: () -> Unit, onEditBgPosition: () -> Unit = {}) {
+    val hapticCtx = LocalContext.current   // onPick/onClick 是非 Composable lambda，Context 得先取
     var showThemePicker by remember { mutableStateOf(false) }
     val current = AppC.themeColor
     val isPreset = COURSE_SWATCHES.any { it.bg == current }
     val isDefault = current == DEFAULT_THEME
 
-    Scaffold(topBar = { TopAppBar(title = { Text("外观设置") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Scaffold(topBar = { TopAppBar(title = { Text("外观设置") }, navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) }) { padding ->
+        Column(Modifier
+            .padding(padding)
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             // 深色模式从「设置」页搬来这里：和主题色同属外观，放在主题色上面
             Surface(color = AppC.card, shape = RoundedCornerShape(12.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
@@ -2598,6 +3129,7 @@ fun AppearancePage(prefs: android.content.SharedPreferences, onBack: () -> Unit,
                             val sel = AppC.mode == v
                             Surface(
                                 onClick = {
+                                    tickHaptic(hapticCtx, HapticKind.SELECT)
                                     AppC.mode = v
                                     prefs.edit().putInt("dark_mode", v).apply()
                                 },
@@ -2623,12 +3155,13 @@ fun AppearancePage(prefs: android.content.SharedPreferences, onBack: () -> Unit,
                     FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         COURSE_SWATCHES.forEach { s ->
                             ThemeSwatch(current == s.bg, s.bg, onPick = {
+                                tickHaptic(hapticCtx, HapticKind.SELECT)
                                 AppC.themeColor = s.bg
                                 saveThemeColor(prefs, s.bg)
                             }) {}
                         }
                         // 自定义框：当前色不在备选里时，它直接显示那个颜色
-                        ThemeSwatch(!isPreset, if (isPreset) AppC.chipGray else current, onPick = { showThemePicker = true }) {
+                        ThemeSwatch(!isPreset, if (isPreset) AppC.chipGray else current, onPick = { tickHaptic(hapticCtx, HapticKind.SELECT); showThemePicker = true }) {
                             if (isPreset) {
                                 Icon(Icons.Default.Palette, "自定义主题色", tint = AppC.textMuted, modifier = Modifier.size(18.dp))
                             }
@@ -2644,6 +3177,7 @@ fun AppearancePage(prefs: android.content.SharedPreferences, onBack: () -> Unit,
                     Spacer(Modifier.height(10.dp))
                     TextButton(
                         onClick = {
+                            tickHaptic(hapticCtx, HapticKind.SELECT)
                             clearThemeColor(prefs)
                             AppC.themeColor = DEFAULT_THEME
                         },
@@ -2690,31 +3224,44 @@ private fun ThemeSwatch(selected: Boolean, bg: Color, onPick: () -> Unit, conten
 /** 用当前主题色画一小段仿真界面，避免"改完要跑到别的页面才知道好不好看" */
 @Composable
 private fun AppearancePreview() {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-        .background(AppC.bg).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.fillMaxWidth().background(AppC.headerBlue, RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 8.dp)) {
+    Column(Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(10.dp))
+        .background(AppC.bg)
+        .padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier
+            .fillMaxWidth()
+            .background(AppC.headerBlue, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)) {
             Icon(Icons.Default.NotificationsActive, null, tint = readableOn(AppC.headerBlue), modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
             Text("课程表", color = readableOn(AppC.headerBlue), fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f).height(30.dp).background(AppC.accentFill, RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
+            Box(Modifier
+                .weight(1f)
+                .height(30.dp)
+                .background(AppC.accentFill, RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
                 Text("主按钮", color = readableOn(AppC.accentFill), fontSize = 12.sp)
             }
             // 选中胶囊：主题色描边 + 主题色文字
-            Box(Modifier.background(AppC.chipGray, RoundedCornerShape(16.dp))
-                .border(1.5.dp, AppC.accent, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 5.dp)) {
+            Box(Modifier
+                .background(AppC.chipGray, RoundedCornerShape(16.dp))
+                .border(1.5.dp, AppC.accent, RoundedCornerShape(16.dp))
+                .padding(horizontal = 12.dp, vertical = 5.dp)) {
                 Text("选中态", color = AppC.accent, fontSize = 12.sp)
             }
             // 当天列高亮
-            Box(Modifier.background(AppC.todayBg, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 5.dp)) {
+            Box(Modifier
+                .background(AppC.todayBg, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp)) {
                 Text("今天", color = AppC.titleDark, fontSize = 12.sp)
             }
         }
     }
 }
 
-// ====== 使用手册 ======
+// ====== 帮助 ======
 /**
  * 各页面被精简掉的解释性文字统一收在这里：页面上只留标题和控件，
  * 想弄明白"这项是干什么的"再来这页查。
@@ -2722,16 +3269,21 @@ private fun AppearancePreview() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManualPage(onBack: () -> Unit) {
+    val hapticCtx = LocalContext.current
     Scaffold(topBar = {
         TopAppBar(
-            title = { Text("使用手册") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+            title = { Text("帮助") },
+            navigationIcon = { IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)
         )
     }) { padding ->
         Column(
-            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())
-                .background(AppC.bg).padding(16.dp),
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .background(AppC.bg)
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             ManualSection("学期设置") {
@@ -2824,7 +3376,9 @@ private fun ManualSection(title: String, lines: @Composable () -> Unit) {
 
 @Composable
 private fun ManualLine(text: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+    Row(Modifier
+        .fillMaxWidth()
+        .padding(vertical = 3.dp)) {
         Text("·", fontSize = 13.sp, color = AppC.textMuted, modifier = Modifier.width(12.dp))
         Text(text, fontSize = 13.sp, color = AppC.textSecondary, lineHeight = 18.sp, modifier = Modifier.weight(1f))
     }
@@ -2851,7 +3405,7 @@ fun AboutPage(onBack: () -> Unit) {
         hintJob?.cancel()
         snackbarHost.currentSnackbarData?.dismiss()
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("关于") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) },
+    Scaffold(topBar = { TopAppBar(title = { Text("关于") }, navigationIcon = { IconButton(onClick = { tickHaptic(context, HapticKind.TAP); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppC.headerBlue, titleContentColor = AppC.headerText, navigationIconContentColor = AppC.headerText)) },
         snackbarHost = {
             // 自绘胶囊样式：默认 Snackbar 的深灰大块和这页的浅色卡片风格完全不搭。
             // 机制仍走 SnackbarHost（Toast 在 Android 11+ 有 cancel 空操作的旧提示重放问题）。
@@ -2879,7 +3433,12 @@ fun AboutPage(onBack: () -> Unit) {
                 }
             }
         }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().background(AppC.chipGray).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier
+            .padding(padding)
+            .fillMaxSize()
+            .background(AppC.chipGray)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
             // 头部卡片：图标 + 名称 + 一句话简介
             Surface(color = AppC.card, shape = RoundedCornerShape(16.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
@@ -2887,7 +3446,9 @@ fun AboutPage(onBack: () -> Unit) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_about),
                         contentDescription = "App Icon",
-                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp))
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
                     )
                     Spacer(Modifier.width(16.dp))
                     Column {
@@ -2900,34 +3461,32 @@ fun AboutPage(onBack: () -> Unit) {
             // 信息列表卡片：图标行风格，GitHub 行可点跳浏览器
             Surface(color = AppC.card, shape = RoundedCornerShape(16.dp), shadowElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    AboutIconRow(rememberVectorPainter(Icons.Default.Code), "版本", value = "v${appVersionName(context)}", onClick = {
-                        val t = System.currentTimeMillis()
+                AboutIconRow(rememberVectorPainter(Icons.Default.Code), "版本", value = "v${appVersionName(context)}", onClick = {
+                    tickHaptic(context, HapticKind.TAP)
+                    val t = System.currentTimeMillis()
                         devTaps = if (t - lastTapAt < 1000) devTaps + 1 else 1
                         lastTapAt = t
                         if (AppC.devModeOn) {
                             // 已经开着就绝不能再用"再点 N 次开启"的倒计时——会让人以为没生效。
                             // 到了原本该出提示的节点，直接确认"已在开发者模式"，后续连点保持安静。
-                            if (devTaps == 5) showHint("已进入开发者模式")
-                            if (devTaps >= 8) devTaps = 0
-                        } else if (devTaps >= 8) {
+                            if (devTaps == 1) showHint("已处于开发者模式，无需再次点击")
+                            if (devTaps >= 7) devTaps = 0
+                        } else if (devTaps >= 7) {
                             devTaps = 0
                             // 统一走入口写标志位（开启不涉及子设置重置）
                             DeveloperSettings.setEnabled(context, true)
                             showHint("开发者模式已开启")
-                        } else if (devTaps >= 5) {
+                        } else if (devTaps >= 3) {
                             // 接近时给个提示，跟安卓"再点 N 次就开启"一样
-                            showHint("再点 ${8 - devTaps} 次开启开发者模式")
+                            showHint("再点 ${7 - devTaps} 次开启开发者模式")
                         }
                     })
-                    HorizontalDivider(Modifier.padding(start = 56.dp), color = AppC.divider)
+                    HorizontalDivider(Modifier.padding(start = 0.dp), color = AppC.divider)
                     AboutIconRow(rememberVectorPainter(Icons.Default.PhoneAndroid), "平台", value = "Android")
-                    HorizontalDivider(Modifier.padding(start = 56.dp), color = AppC.divider)
-                    // 版本号永远是 2.0，装的是哪一版只能靠这个"安装时间"分辨：
-                    // 报 bug 前先对一眼，别拿旧包测了半天
-                    AboutIconRow(rememberVectorPainter(Icons.Default.Update), "安装时间", value = appInstallTime(context))
-                    HorizontalDivider(Modifier.padding(start = 56.dp), color = AppC.divider)
-                    AboutIconRow(painterResource(R.drawable.ic_github), "GitHub", chevron = true, onClick = {
-                        runCatching {
+                    HorizontalDivider(Modifier.padding(start = 0.dp), color = AppC.divider)
+                AboutIconRow(painterResource(R.drawable.ic_github), "GitHub", chevron = true, onClick = {
+                    tickHaptic(context, HapticKind.TAP)
+                    runCatching {
                             context.startActivity(
                                 android.content.Intent(
                                     android.content.Intent.ACTION_VIEW,
@@ -2951,7 +3510,9 @@ fun AboutPage(onBack: () -> Unit) {
 @Composable
 fun AboutIconRow(icon: androidx.compose.ui.graphics.painter.Painter, title: String, value: String = "", chevron: Boolean = false, onClick: (() -> Unit)? = null) {
     Row(
-        (if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick) else Modifier.fillMaxWidth())
+        (if (onClick != null) Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick) else Modifier.fillMaxWidth())
             .padding(horizontal = 18.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

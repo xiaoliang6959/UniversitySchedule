@@ -343,12 +343,12 @@ fun OnboardingApp(
             // 两种情况共用同一套左右语义：右边（主位）= 留在这一步继续弄，主题色高亮；
             // 左边（次位）= 仍然跳过，灰色、不推荐。用户不用每次重新判断哪个在劝他留下。
             confirmButton = {
-                TextButton(onClick = { skipStep = -1 }) {
+                TextButton(onClick = { tickHaptic(context, HapticKind.TAP); skipStep = -1 }) {
                     Text(if (added) "继续编辑" else "取消", color = AppC.accent)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { doSkip(skipStep) }) {
+                TextButton(onClick = { tickHaptic(context, HapticKind.TAP); doSkip(skipStep) }) {
                     Text(if (added) "清除并跳过" else "知道了", color = AppC.textMuted)
                 }
             },
@@ -390,6 +390,7 @@ private fun ObStepPage(
 
 @Composable
 private fun ObTopBar(title: String, onBack: (() -> Unit)?) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
     // 小窗/分屏：系统在窗口顶部中央画"⋯"把手，且状态栏 inset 常为 0 → 顶栏额外下移避让
     val smallWindow = LocalSmallWindow.current
     Surface(color = AppC.headerBlue, modifier = Modifier.fillMaxWidth()) {
@@ -402,7 +403,7 @@ private fun ObTopBar(title: String, onBack: (() -> Unit)?) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (onBack != null) {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回上一页", tint = AppC.headerText)
                     }
                 } else {
@@ -423,6 +424,7 @@ private fun ObBottomBar(
     onSecondary: (() -> Unit)? = null,
     primaryEnabled: Boolean = true,
 ) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
     // 小窗里底栏下方会露出抬升留白，12dp 阴影投在白底上形成明显"分层线"→ 小窗去阴影。
     Surface(
         color = AppC.card,
@@ -437,7 +439,7 @@ private fun ObBottomBar(
                     // 「跳过」和「下一步」等宽、同圆角：主按钮置灰时跳过常常是页面上唯一的出路，
                     // 不能把它做成又小又像装饰的次要控件。表达式只靠主题色描边就够（不填色）。
                     OutlinedButton(
-                        onClick = onSecondary,
+                        onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onSecondary() },
                         modifier = Modifier.weight(1f).height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.5.dp, AppC.accent),
@@ -445,7 +447,7 @@ private fun ObBottomBar(
                     ) { Text(secondaryText, fontSize = 15.sp, fontWeight = FontWeight.Medium) }
                 }
                 Button(
-                    onClick = onPrimary,
+                    onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onPrimary() },
                     enabled = primaryEnabled,
                     modifier = Modifier.weight(1f).height(48.dp),
                     shape = RoundedCornerShape(12.dp),
@@ -485,6 +487,7 @@ private fun ObStepDots(page: Int) {
 
 @Composable
 private fun WelcomePage(onNext: () -> Unit) {
+    val hapticCtx = LocalContext.current   // onClick 不是 Composable，Context 得先取
     val smallWindow = LocalSmallWindow.current
     Column(
         Modifier.fillMaxSize()
@@ -520,7 +523,7 @@ private fun WelcomePage(onNext: () -> Unit) {
         // 全屏：weight 把按钮顶到底部；小窗：改用固定间距，随内容一起滚动
         if (smallWindow) Spacer(Modifier.height(24.dp)) else Spacer(Modifier.weight(1f))
         Button(
-            onClick = onNext,
+            onClick = { tickHaptic(hapticCtx, HapticKind.TAP); onNext() },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             // 圆角统一 12dp：和底栏那两颗按钮一致，别一页一个形状
             shape = RoundedCornerShape(12.dp),
@@ -636,6 +639,7 @@ private fun ObChoiceTile(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val hapticCtx = LocalContext.current   // clickable 的 lambda 不是 Composable，Context 得先取
     Surface(
         color = AppC.card, shape = RoundedCornerShape(16.dp), shadowElevation = 2.dp,
         modifier = Modifier.fillMaxWidth()
@@ -644,7 +648,7 @@ private fun ObChoiceTile(
                 if (selected || highlight) AppC.accent else AppC.stepBorder,
                 RoundedCornerShape(16.dp),
             )
-            .clickable(onClick = onClick),
+            .clickable { tickHaptic(hapticCtx, HapticKind.SELECT); onClick() },
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(

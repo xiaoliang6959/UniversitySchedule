@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  显式浅色模式：纯太阳图标（无 A）。由 lightmode.svg 转来：
+  八道光线 + 中央圆盘 r=6.5（与 LightMode A 同一骨架，可直接互换）。
+  单 tint 着色（fillColor 写死黑色，Icon 用 tint 覆盖）。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 8 道光线：2px 圆头描边，视觉半径 7.5 → 11 -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M20.5,12 L22,12 M18.01,18.01 L19.07,19.07 M12,20.5 L12,22 M5.99,18.01 L4.93,19.07 M3.5,12 L2,12 M5.99,5.99 L4.93,4.93 M12,3.5 L12,2 M18.01,5.99 L19.07,4.93" />
+
+    <!-- 中央圆盘 r=6.5 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,5.5 A6.5,6.5 0 0 1 18.5,12 A6.5,6.5 0 0 1 12,18.5 A6.5,6.5 0 0 1 5.5,12 A6.5,6.5 0 0 1 12,5.5 Z" />
+</vector>

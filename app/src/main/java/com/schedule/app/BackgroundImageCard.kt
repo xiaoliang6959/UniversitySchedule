@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 /**
  * 外观设置里的「课表背景图片」卡片。
@@ -86,6 +87,7 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                 Switch(
                     checked = on,
                     onCheckedChange = { checked ->
+                        tickHaptic(ctx, HapticKind.TOGGLE)
                         on = checked
                         BackgroundStore.setEnabled(ctx, checked)
                         AppC.bgImageOn = checked
@@ -111,7 +113,7 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                             .clip(RoundedCornerShape(8.dp))
                             .background(AppC.chipGray)
                             .border(1.dp, AppC.cardBorder, RoundedCornerShape(8.dp))
-                            .clickable { pickImage() },
+                            .clickable { tickHaptic(ctx, HapticKind.TAP); pickImage() },
                         contentAlignment = Alignment.Center,
                     ) {
                         val bmp = remember(version, AppC.bgVersion) { BackgroundStore.bitmap(ctx) }
@@ -124,7 +126,7 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                         }
                     }
                     Column {
-                        TextButton(onClick = { pickImage() }, contentPadding = PaddingValues(0.dp)) {
+                        TextButton(onClick = { tickHaptic(ctx, HapticKind.TAP); pickImage() }, contentPadding = PaddingValues(0.dp)) {
                             Text(if (BackgroundStore.hasImage(ctx)) "更换图片" else "选择图片",
                                 fontSize = 13.sp, color = AppC.accent)
                         }
@@ -151,11 +153,12 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                         scrim = v
                         AppC.bgScrim = scrim / 100f
                     },
-                    onFinished = { BackgroundStore.setScrimPct(ctx, scrim.toInt()) },
+                    onFinished = { tickHaptic(ctx, HapticKind.SLIDE); BackgroundStore.setScrimPct(ctx, scrim.toInt()) },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
                         onClick = {
+                            tickHaptic(ctx, HapticKind.TAP)
                             scrim = BackgroundStore.DEFAULT_SCRIM_PCT.toFloat()
                             AppC.bgScrim = scrim / 100f
                             BackgroundStore.resetScrim(ctx)
@@ -191,11 +194,12 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                         blockAlpha = v
                         AppC.bgBlockAlpha = blockAlpha / 100f
                     },
-                    onFinished = { BackgroundStore.setBlockAlphaPct(ctx, blockAlpha.toInt()) },
+                    onFinished = { tickHaptic(ctx, HapticKind.SLIDE); BackgroundStore.setBlockAlphaPct(ctx, blockAlpha.toInt()) },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
                         onClick = {
+                            tickHaptic(ctx, HapticKind.TAP)
                             blockAlpha = BackgroundStore.DEFAULT_BLOCK_ALPHA_PCT.toFloat()
                             AppC.bgBlockAlpha = 0f
                             BackgroundStore.resetBlockAlpha(ctx)
@@ -221,7 +225,7 @@ fun BackgroundImageCard(onEditPosition: () -> Unit = {}) {
                 val mode = LocalWindowMode.current
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                        .clickable(enabled = BackgroundStore.hasImage(ctx)) { onEditPosition() }
+                        .clickable(enabled = BackgroundStore.hasImage(ctx)) { tickHaptic(ctx, HapticKind.TAP); onEditPosition() }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -256,9 +260,21 @@ private fun BgAlphaSlider(
     onChange: (Float) -> Unit,
     onFinished: () -> Unit,
 ) {
+    val hapticCtx = LocalContext.current
+    // 拖动时的连续反馈：上次"哒"过的整数值。取值范围本身就是百分数（0~90 / 0~100），
+    // 所以每变化 1 个单位 = 每 1% 震一次。只在跨过整数时才震 —— 同一格内来回蹭不重复响。
+    var lastTick by remember { mutableIntStateOf(value.roundToInt()) }
     Slider(
         value = value,
-        onValueChange = { v -> onChange(v.coerceIn(min, max)) },
+        onValueChange = { v ->
+            val cv = v.coerceIn(min, max)
+            val iv = cv.roundToInt()
+            if (iv != lastTick) {
+                lastTick = iv
+                tickHaptic(hapticCtx, HapticKind.DRAG)
+            }
+            onChange(cv)
+        },
         onValueChangeFinished = onFinished,
         valueRange = min..max,
         modifier = Modifier.fillMaxWidth().height(30.dp),

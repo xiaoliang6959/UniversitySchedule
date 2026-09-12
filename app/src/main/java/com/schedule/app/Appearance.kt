@@ -21,7 +21,8 @@ data class CourseSwatch(val bg: Color, val fg: Color, val name: String)
  * 课程颜色备选（10 色）。
  *
  * 原来第 4 个 #66BB6A（绿）和第 9 个 #8BC34A（草绿）色相只差十几度，
- * 摆在同一行里几乎分不出来，第 9 个换成棕色 #8D6E63 —— 色相、明度、饱和度都拉开了。
+ * 摆在同一行里几乎分不出来，第 9 个换成荧光绿 #B2FF59 —— 高明度高饱和，
+ * 与黄、绿、青都拉开明显差距。
  */
 val COURSE_SWATCHES: List<CourseSwatch> = listOf(
     CourseSwatch(Color(0xFFFF5252), Color(0xFFFFFFFF), "红"),
@@ -32,7 +33,7 @@ val COURSE_SWATCHES: List<CourseSwatch> = listOf(
     CourseSwatch(Color(0xFF29B6F6), Color(0xFFFFFFFF), "蓝"),
     CourseSwatch(Color(0xFFAB47BC), Color(0xFFFFFFFF), "紫"),
     CourseSwatch(Color(0xFFEC407A), Color(0xFFFFFFFF), "玫红"),
-    CourseSwatch(Color(0xFF8D6E63), Color(0xFFFFFFFF), "棕"),
+    CourseSwatch(Color(0xFFB2FF59), Color(0xFF000000), "荧绿"),
     CourseSwatch(Color(0xFF26A69A), Color(0xFFFFFFFF), "蓝绿"),
 )
 
